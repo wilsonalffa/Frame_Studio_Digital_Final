@@ -1627,6 +1627,60 @@
         <p>Gerencie o seu acesso principal e crie logins separados para cada unidade da operação.</p>
       </div>
 
+      <!-- DASHBOARD DE MONITORAMENTO -->
+      <div class="canvas-card" style="margin-top:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <div class="card-h">Monitoramento</div>
+          <button class="btn dark" style="padding:8px 14px;font-size:12px" onclick="adminDashboardLoad()">⟳ Atualizar</button>
+        </div>
+
+        <!-- Totais globais -->
+        <div id="adminDashTotals" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px">
+          <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:14px 12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--brown)" id="dashTotalLojas">—</div>
+            <div style="font-size:11px;color:var(--gray);margin-top:3px">Unidades ativas</div>
+          </div>
+          <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:14px 12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--brown)" id="dashTotalClientes">—</div>
+            <div style="font-size:11px;color:var(--gray);margin-top:3px">Clientes totais</div>
+          </div>
+          <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:14px 12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--brown)" id="dashTotalConsultas">—</div>
+            <div style="font-size:11px;color:var(--gray);margin-top:3px">Orçamentos</div>
+          </div>
+          <div style="background:#EBF7F0;border:1px solid #b6e4cc;border-radius:8px;padding:14px 12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#2E7D52" id="dashTotalVendido">—</div>
+            <div style="font-size:11px;color:#2E7D52;margin-top:3px">Valor fechado (R$)</div>
+          </div>
+        </div>
+
+        <!-- Tabela por unidade -->
+        <div style="overflow-x:auto">
+          <table id="adminDashTable" style="width:100%;border-collapse:collapse;font-size:13px;min-width:700px">
+            <thead>
+              <tr style="border-bottom:2px solid var(--border2);color:var(--gray);font-size:11px;letter-spacing:1px;text-transform:uppercase">
+                <th style="text-align:left;padding:8px 6px;font-weight:700">Unidade</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Status</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Último acesso</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Logins</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Clientes</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Orçamentos</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Em aberto</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Fechados</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Itens catálogo</th>
+                <th style="text-align:center;padding:8px 6px;font-weight:700">Simulações</th>
+                <th style="text-align:right;padding:8px 6px;font-weight:700">Valor fechado</th>
+                <th style="text-align:right;padding:8px 6px;font-weight:700">Ticket médio</th>
+              </tr>
+            </thead>
+            <tbody id="adminDashBody">
+              <tr><td colspan="12" style="padding:20px;text-align:center;color:var(--gray);font-size:12px">Carregando…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- UNIDADES E ACESSOS -->
       <div class="canvas-card" style="margin-top:18px">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px">
           <div>

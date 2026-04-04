@@ -195,6 +195,10 @@ def table_columns(conn, table_name):
 
 def ensure_column(conn, table_name, column_name, definition_sql):
     if conn.backend == 'postgres':
+        try:
+            conn.execute(f'ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {definition_sql}')
+        except Exception:
+            pass
         return
     if column_name not in table_columns(conn, table_name):
         conn.execute(f'ALTER TABLE {table_name} ADD COLUMN {definition_sql}')
@@ -614,6 +618,8 @@ def init_db():
             ensure_column(conn, 'users', 'display_name', 'display_name TEXT')
             ensure_column(conn, 'users', 'role', "role TEXT NOT NULL DEFAULT 'user'")
             ensure_column(conn, 'users', 'is_active', 'is_active INTEGER NOT NULL DEFAULT 1')
+            ensure_column(conn, 'users', 'last_login_at', 'last_login_at TEXT')
+            ensure_column(conn, 'users', 'login_count', 'login_count INTEGER NOT NULL DEFAULT 0')
             ensure_column(conn, 'clientes', 'owner_user_id', 'owner_user_id INTEGER')
             ensure_column(conn, 'clientes', 'store_id', 'store_id INTEGER')
             ensure_column(conn, 'consultas', 'owner_user_id', 'owner_user_id INTEGER')
@@ -758,6 +764,14 @@ def login():
             row = get_user_row_by_username(conn, username)
         if row and row['is_active'] and check_password_hash(row['password_hash'], password):
             set_session_user(row_to_user(row))
+            try:
+                with get_db() as conn:
+                    conn.execute(
+                        'UPDATE users SET last_login_at = ?, login_count = COALESCE(login_count, 0) + 1 WHERE id = ?',
+                        (now_iso(), row['id'])
+                    )
+            except Exception:
+                pass
             next_url = request.args.get('next') or url_for('index')
             return redirect(next_url)
         else:
@@ -991,6 +1005,91 @@ def desativar_loja(store_id):
         )
 
     return jsonify({'ok': True, 'store_id': store_id})
+
+
+@app.route('/api/admin/dashboard', methods=['GET'])
+@login_required
+@admin_required
+def admin_dashboard():
+    with get_db() as conn:
+        totals_row = conn.execute(
+            '''
+            SELECT
+                (SELECT COUNT(*) FROM stores WHERE is_active = ?) AS total_lojas,
+                (SELECT COUNT(*) FROM clientes) AS total_clientes,
+                (SELECT COUNT(*) FROM consultas) AS total_consultas,
+                (SELECT COALESCE(SUM(total), 0) FROM consultas WHERE status = ?) AS total_vendido
+            ''',
+            (True, 'fechado')
+        ).fetchone()
+
+        store_rows = conn.execute(
+            '''
+            SELECT
+                s.id, s.name AS store_name, s.is_active,
+                u.display_name, u.username,
+                COALESCE(u.last_login_at, '') AS last_login_at,
+                COALESCE(u.login_count, 0) AS login_count,
+                (SELECT COUNT(*) FROM clientes c WHERE c.store_id = s.id) AS total_clientes,
+                (SELECT COUNT(*) FROM consultas cs WHERE cs.store_id = s.id) AS total_consultas,
+                (SELECT COALESCE(SUM(cs.total), 0) FROM consultas cs WHERE cs.store_id = s.id AND cs.status = ?) AS total_vendido,
+                (SELECT COALESCE(AVG(cs.total), 0) FROM consultas cs WHERE cs.store_id = s.id AND cs.status = ?) AS ticket_medio,
+                (SELECT COUNT(*) FROM consultas cs WHERE cs.store_id = s.id AND cs.status = ?) AS em_andamento,
+                (SELECT COUNT(*) FROM consultas cs WHERE cs.store_id = s.id AND cs.status = ?) AS fechados
+            FROM stores s
+            LEFT JOIN users u ON u.id = (
+                SELECT ux.id FROM users ux WHERE ux.store_id = s.id ORDER BY ux.id LIMIT 1
+            )
+            ORDER BY total_vendido DESC
+            ''',
+            ('fechado', 'fechado', 'em andamento', 'fechado')
+        ).fetchall()
+
+        state_rows = conn.execute(
+            "SELECT store_id, data_json FROM store_state WHERE scope = 'catalog'"
+        ).fetchall()
+
+    catalog_by_store = {}
+    for sr in state_rows:
+        try:
+            data = json.loads(sr['data_json']) if sr['data_json'] else {}
+            catalog_by_store[sr['store_id']] = {
+                'items': len(data.get('items') or []),
+                'sims': len(data.get('sims') or []),
+            }
+        except Exception:
+            catalog_by_store[sr['store_id']] = {'items': 0, 'sims': 0}
+
+    stores = []
+    for row in store_rows:
+        cat = catalog_by_store.get(row['id'], {'items': 0, 'sims': 0})
+        stores.append({
+            'id': row['id'],
+            'store_name': row['store_name'],
+            'is_active': bool(row['is_active']),
+            'display_name': row['display_name'] or row['username'] or '',
+            'username': row['username'] or '',
+            'last_login_at': row['last_login_at'],
+            'login_count': int(row['login_count'] or 0),
+            'total_clientes': int(row['total_clientes'] or 0),
+            'total_consultas': int(row['total_consultas'] or 0),
+            'total_vendido': round(float(row['total_vendido'] or 0), 2),
+            'ticket_medio': round(float(row['ticket_medio'] or 0), 2),
+            'em_andamento': int(row['em_andamento'] or 0),
+            'fechados': int(row['fechados'] or 0),
+            'catalog_items': cat['items'],
+            'catalog_sims': cat['sims'],
+        })
+
+    return jsonify({
+        'totals': {
+            'lojas': int(totals_row['total_lojas'] or 0),
+            'clientes': int(totals_row['total_clientes'] or 0),
+            'consultas': int(totals_row['total_consultas'] or 0),
+            'vendido': round(float(totals_row['total_vendido'] or 0), 2),
+        },
+        'stores': stores,
+    })
 
 
 @app.route('/api/clientes', methods=['GET'])

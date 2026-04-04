@@ -117,6 +117,9 @@ function switchTab(id,btn){
     ffCatalogInit();
     ffCatalogRender();
   }
+  if(id==='admin' && typeof adminDashboardLoad==='function'){
+    adminDashboardLoad();
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -4836,6 +4839,63 @@ async function carregarUsuariosSistema() {
     }).join('');
   } catch (err) {
     listEl.innerHTML = '<div style="padding:12px;border:1px solid #E6B8B8;background:#FFF5F5;border-radius:6px;color:#8A1F1F;font-size:13px">' + _esc(err.message || 'Erro ao carregar unidades.') + '</div>';
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+//  DASHBOARD DE MONITORAMENTO (admin)
+// ─────────────────────────────────────────────────────────
+function _fmtBrl(v) {
+  return 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function _fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return iso; }
+}
+
+async function adminDashboardLoad() {
+  const body = document.getElementById('adminDashBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="12" style="padding:20px;text-align:center;color:var(--gray);font-size:12px">Carregando…</td></tr>';
+  try {
+    const out = await _ffApi('/api/admin/dashboard');
+    const t = out.totals || {};
+    const _set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    _set('dashTotalLojas', t.lojas ?? '—');
+    _set('dashTotalClientes', t.clientes ?? '—');
+    _set('dashTotalConsultas', t.consultas ?? '—');
+    _set('dashTotalVendido', _fmtBrl(t.vendido));
+
+    const stores = out.stores || [];
+    if (!stores.length) {
+      body.innerHTML = '<tr><td colspan="12" style="padding:20px;text-align:center;color:var(--gray);font-size:12px">Nenhuma unidade encontrada.</td></tr>';
+      return;
+    }
+
+    body.innerHTML = stores.map(s => {
+      const statusBadge = s.is_active
+        ? '<span style="background:#EBF7F0;color:#2E7D52;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700">Ativo</span>'
+        : '<span style="background:#FEF0E4;color:#A0520A;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700">Inativo</span>';
+      return `<tr style="border-bottom:1px solid var(--border2);transition:background .15s" onmouseover="this.style.background='var(--cream2)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 6px;font-weight:600;color:var(--brown)">${_esc(s.store_name)}<br><span style="font-size:11px;color:var(--gray);font-weight:400">@${_esc(s.username)}</span></td>
+        <td style="padding:10px 6px;text-align:center">${statusBadge}</td>
+        <td style="padding:10px 6px;text-align:center;font-size:12px;color:var(--gray)">${_fmtDate(s.last_login_at)}</td>
+        <td style="padding:10px 6px;text-align:center;font-weight:700">${s.login_count}</td>
+        <td style="padding:10px 6px;text-align:center">${s.total_clientes}</td>
+        <td style="padding:10px 6px;text-align:center">${s.total_consultas}</td>
+        <td style="padding:10px 6px;text-align:center;color:#A0520A;font-weight:600">${s.em_andamento}</td>
+        <td style="padding:10px 6px;text-align:center;color:#2E7D52;font-weight:600">${s.fechados}</td>
+        <td style="padding:10px 6px;text-align:center">${s.catalog_items}</td>
+        <td style="padding:10px 6px;text-align:center">${s.catalog_sims}</td>
+        <td style="padding:10px 6px;text-align:right;font-weight:700;color:#2E7D52">${_fmtBrl(s.total_vendido)}</td>
+        <td style="padding:10px 6px;text-align:right;color:var(--gray)">${_fmtBrl(s.ticket_medio)}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    if (body) body.innerHTML = '<tr><td colspan="12" style="padding:16px;color:#8A1F1F;font-size:13px">' + _esc(err.message || 'Erro ao carregar dashboard.') + '</td></tr>';
   }
 }
 
