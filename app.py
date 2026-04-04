@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g
 from functools import wraps
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -341,28 +341,46 @@ def clear_session_user():
 
 
 def get_authenticated_user():
+    if hasattr(g, '_auth_user_loaded'):
+        return g._auth_user
+
+    g._auth_user_loaded = True
+
     if not session.get('logged_in'):
+        g._auth_user = None
         return None
 
-    user = None
+    row = None
     user_id = session.get('user_id')
     username = session.get('username')
 
     if user_id:
-        user = get_user_by_id(user_id)
+        with get_db() as conn:
+            row = conn.execute(
+                '''
+                SELECT u.*, s.name AS store_name, s.is_active AS store_active
+                FROM users u
+                LEFT JOIN stores s ON s.id = u.store_id
+                WHERE u.id = ?
+                ''',
+                (user_id,)
+            ).fetchone()
     elif username:
         with get_db() as conn:
             row = get_user_row_by_username(conn, username)
-        user = row_to_user(row)
 
-    if not user or not user.get('is_active') or not user.get('store_id'):
+    if not row or not row['is_active'] or not row['store_id']:
         clear_session_user()
+        g._auth_user = None
         return None
 
-    store = get_store_by_id(user['store_id'])
-    if not store or not store.get('is_active'):
+    if not row.get('store_active'):
         clear_session_user()
+        g._auth_user = None
         return None
+
+    user = row_to_user(row)
+    user['store_name'] = row['store_name'] or ''
 
     session['logged_in'] = True
     session['user_id'] = user['id']
@@ -370,8 +388,8 @@ def get_authenticated_user():
     session['display_name'] = user['display_name'] or user['username']
     session['role'] = normalize_role(user['role'])
     session['store_id'] = user['store_id']
-    session['store_name'] = store['name']
-    user['store_name'] = store['name']
+    session['store_name'] = user['store_name']
+    g._auth_user = user
     return user
 
 
