@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, has_request_context
 from functools import wraps
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -77,9 +77,10 @@ class CursorCompat:
 
 
 class ConnectionCompat:
-    def __init__(self, conn, backend):
+    def __init__(self, conn, backend, close_on_exit=True):
         self._conn = conn
         self.backend = backend
+        self._close_on_exit = close_on_exit
 
     def execute(self, sql, params=()):
         query = sql
@@ -115,7 +116,8 @@ class ConnectionCompat:
         self._conn.commit()
 
     def close(self):
-        self._conn.close()
+        if self._close_on_exit:
+            self._conn.close()
 
     def __enter__(self):
         return self
@@ -128,24 +130,49 @@ class ConnectionCompat:
                 self._conn.rollback()
             except Exception:
                 pass
-        self._conn.close()
+        if self._close_on_exit:
+            self._conn.close()
+
+
+@app.teardown_appcontext
+def close_request_db(_exc=None):
+    conn = getattr(g, '_db_conn', None)
+    if conn is None:
+        return
+    try:
+        conn._conn.close()
+    except Exception:
+        pass
+    finally:
+        g._db_conn = None
 
 
 def get_db():
+    if has_request_context():
+        cached = getattr(g, '_db_conn', None)
+        if cached is not None:
+            return cached
+
     prefer_postgres = DB_MODE == 'postgres' or (DB_MODE != 'sqlite' and (DIRECT_URL or DATABASE_URL))
 
     if prefer_postgres:
         try:
             dsn = DIRECT_URL or DATABASE_URL
             pg_conn = psycopg.connect(dsn, row_factory=dict_row)
-            return ConnectionCompat(pg_conn, 'postgres')
+            conn = ConnectionCompat(pg_conn, 'postgres', close_on_exit=not has_request_context())
+            if has_request_context():
+                g._db_conn = conn
+            return conn
         except Exception:
             if DB_MODE == 'postgres':
                 raise
 
     sqlite_conn = sqlite3.connect(DB_PATH)
     sqlite_conn.row_factory = sqlite3.Row
-    return ConnectionCompat(sqlite_conn, 'sqlite')
+    conn = ConnectionCompat(sqlite_conn, 'sqlite', close_on_exit=not has_request_context())
+    if has_request_context():
+        g._db_conn = conn
+    return conn
 
 
 def now_iso():
