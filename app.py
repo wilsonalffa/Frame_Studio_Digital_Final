@@ -46,8 +46,8 @@ app.secret_key = env_guard('SECRET_KEY', 'fastframe-dev-secret-2026-mude-em-prod
 
 APP_USER = env_guard('FF_USER', 'fastframe')
 APP_PASS = env_guard('FF_PASS', 'sorocaba2026')
-APP_USER_NAME = env_guard('FF_USER_NAME', APP_USER)
-APP_STORE_NAME = env_guard('FF_STORE_NAME', APP_USER_NAME)
+APP_USER_NAME = (os.environ.get('FF_USER_NAME') or APP_USER).strip() or APP_USER
+APP_STORE_NAME = (os.environ.get('FF_STORE_NAME') or APP_USER_NAME).strip() or APP_USER_NAME
 SYNC_BOOTSTRAP_USER = str(os.environ.get('FF_SYNC_BOOTSTRAP_USER', '0')).strip().lower() in ('1', 'true', 'yes', 'on')
 STORE_STATE_DEFAULTS = {
     'catalog': {'version': 2, 'folders': [], 'items': [], 'sims': []},
