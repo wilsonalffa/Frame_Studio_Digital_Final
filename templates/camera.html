@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Frame Studio — Camera</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Avenir', 'Nunito', sans-serif;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #camera-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      background: #1a1a1a;
+    }
+
+    #camera-stream {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .camera-controls {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 12px;
+      z-index: 100;
+      align-items: center;
+    }
+
+    .btn-capture {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #B22222, #8B0000);
+      border: 4px solid white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      transition: transform 0.1s;
+    }
+
+    .btn-capture:active {
+      transform: scale(0.95);
+    }
+
+    .btn-toggle {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.2);
+      border: 2px solid white;
+      color: white;
+      cursor: pointer;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-toggle:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    #preview-canvas {
+      display: none;
+    }
+
+    .status-bar {
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 12px;
+      text-align: center;
+      font-size: 12px;
+      position: fixed;
+      bottom: 100px;
+      left: 0;
+      right: 0;
+    }
+
+    .upload-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      z-index: 200;
+    }
+
+    .upload-progress .bar {
+      height: 100%;
+      background: linear-gradient(90deg, #B22222, #FF6B6B);
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .modal-preview {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.9);
+      display: none;
+      flex-direction: column;
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-preview.active {
+      display: flex;
+    }
+
+    .modal-preview img {
+      max-width: 90%;
+      max-height: 70vh;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn-action {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-send {
+      background: linear-gradient(135deg, #B22222, #8B0000);
+      color: white;
+    }
+
+    .btn-send:active {
+      transform: scale(0.95);
+    }
+
+    .btn-cancel {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 1px solid white;
+    }
+
+    .btn-cancel:active {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    @media (max-width: 480px) {
+      .camera-controls {
+        width: 100%;
+        padding: 0 12px;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="camera-container">
+    <video id="camera-stream" playsinline></video>
+    <canvas id="preview-canvas"></canvas>
+  </div>
+
+  <div class="upload-progress">
+    <div class="bar"></div>
+  </div>
+
+  <div class="status-bar" id="statusBar">
+    📡 Conectando... | 📱 Preparando câmera...
+  </div>
+
+  <div class="camera-controls">
+    <button class="btn-toggle" id="btn-flip" title="Trocar câmera">🔄</button>
+    <button class="btn-capture" id="btn-capture" title="Tirar foto">📷</button>
+  </div>
+
+  <div class="modal-preview" id="previewModal">
+    <img id="previewImage" src="" alt="preview">
+    <div class="modal-actions">
+      <button class="btn-action btn-send" onclick="sendPhoto()">Enviar para Frame Studio</button>
+      <button class="btn-action btn-cancel" onclick="retakePhoto()">Tirar Outra</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script>
+    // ─── Estado global ───
+    let videoStream = null;
+    let currentFacingMode = 'environment'; // 'environment' = câmera traseira
+    let lastPhotoBlob = null;
+    let socket = null;
+    let socketStatus = '📡 Conectando...';
+    let cameraStatus = '📱 Preparando câmera...';
+
+    function refreshStatus() {
+      document.getElementById('statusBar').textContent = `${socketStatus} | ${cameraStatus}`;
+    }
+
+    function canUseCameraOnThisOrigin() {
+      const host = window.location.hostname;
+      return window.isSecureContext || host === 'localhost' || host === '127.0.0.1';
+    }
+
+    async function getUserMediaCompat(constraints) {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        return navigator.mediaDevices.getUserMedia(constraints);
+      }
+      const legacy = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+      if (!legacy) {
+        throw new Error('getUserMedia indisponível');
+      }
+      return new Promise((resolve, reject) => legacy.call(navigator, constraints, resolve, reject));
+    }
+
+    // ─── Conecta WebSocket ───
+    function initSocket() {
+      socket = io('/', {
+        query: { device: 'mobile' },
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5
+      });
+
+      socket.on('connect', () => {
+        socketStatus = '🟢 Conectado ao Frame Studio';
+        refreshStatus();
+      });
+
+      socket.on('disconnect', () => {
+        socketStatus = '🔴 Desconectado';
+        refreshStatus();
+      });
+
+      socket.on('error', () => {
+        socketStatus = '⚠️ Erro de conexão';
+        refreshStatus();
+      });
+    }
+
+    // ─── Inicializa câmera ───
+    async function initCamera() {
+      try {
+        if (!canUseCameraOnThisOrigin()) {
+          cameraStatus = '❌ Câmera bloqueada por segurança: abra em HTTPS';
+          refreshStatus();
+          return;
+        }
+
+        const hasModern = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+        const hasLegacy = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+        if (!hasModern && !hasLegacy) {
+          cameraStatus = '❌ Navegador sem suporte de câmera';
+          refreshStatus();
+          return;
+        }
+
+        cameraStatus = '📱 Acessando câmera...';
+        refreshStatus();
+
+        const tries = [
+          {
+            video: {
+              facingMode: { ideal: currentFacingMode },
+              width: { ideal: 1920 },
+              height: { ideal: 1440 }
+            },
+            audio: false
+          },
+          {
+            video: { facingMode: currentFacingMode },
+            audio: false
+          },
+          {
+            video: true,
+            audio: false
+          }
+        ];
+
+        let stream = null;
+        let lastError = null;
+        for (const constraints of tries) {
+          try {
+            stream = await getUserMediaCompat(constraints);
+            break;
+          } catch (err) {
+            lastError = err;
+          }
+        }
+
+        if (!stream) {
+          throw lastError || new Error('Não foi possível abrir a câmera.');
+        }
+
+        videoStream = stream;
+        const video = document.getElementById('camera-stream');
+        video.setAttribute('autoplay', '');
+        video.setAttribute('muted', '');
+        video.setAttribute('playsinline', '');
+        video.muted = true;
+        video.srcObject = videoStream;
+        
+        await new Promise(resolve => {
+          video.onloadedmetadata = resolve;
+        });
+
+        await video.play();
+        cameraStatus = '✅ Câmera pronta — Tire uma foto!';
+        refreshStatus();
+      } catch (error) {
+        if (error && error.name === 'NotAllowedError') {
+          cameraStatus = '❌ Permissão negada no Chrome';
+        } else if (error && error.name === 'NotFoundError') {
+          cameraStatus = '❌ Nenhuma câmera encontrada';
+        } else if (error && error.name === 'NotReadableError') {
+          cameraStatus = '❌ Câmera em uso por outro app';
+        } else {
+          cameraStatus = `❌ Erro ao abrir câmera: ${error.message}`;
+        }
+        refreshStatus();
+        console.error('Erro ao acessar câmera:', error);
+      }
+    }
+
+    // ─── Captura foto ───
+    document.getElementById('btn-capture').addEventListener('click', () => {
+      const video = document.getElementById('camera-stream');
+      const canvas = document.getElementById('preview-canvas');
+      const ctx = canvas.getContext('2d');
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
+      canvas.toBlob(blob => {
+        lastPhotoBlob = blob;
+        const reader = new FileReader();
+        reader.onload = () => {
+          document.getElementById('previewImage').src = reader.result;
+          document.getElementById('previewModal').classList.add('active');
+          updateStatus('🖼️ Foto capturada — Confirme para enviar');
+        };
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.85);
+    });
+
+    // ─── Envia foto para servidor ───
+    async function sendPhoto() {
+      if (!lastPhotoBlob || !socket || !socket.connected) {
+        updateStatus('❌ Erro: Câmera ou conexão indisponível');
+        return;
+      }
+
+      try {
+        updateStatus('📤 Enviando...');
+        const reader = new FileReader();
+        
+        reader.onload = async () => {
+          const base64 = reader.result;
+
+          const response = await fetch('/api/upload-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              image: base64,
+              mimeType: 'image/jpeg'
+            })
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            updateStatus(`✅ Enviada! ${result.width}x${result.height}px`);
+            retakePhoto();
+            
+            // Reset após 3 segundos
+            setTimeout(() => {
+              document.getElementById('previewModal').classList.remove('active');
+              updateStatus('✅ Câmera pronta — Tire outra foto!');
+            }, 3000);
+          } else {
+            updateStatus('❌ Erro ao enviar');
+          }
+        };
+
+        reader.readAsDataURL(lastPhotoBlob);
+      } catch (error) {
+        updateStatus(`❌ Erro: ${error.message}`);
+      }
+    }
+
+    // ─── Tira outra foto ───
+    function retakePhoto() {
+      document.getElementById('previewModal').classList.remove('active');
+      lastPhotoBlob = null;
+      updateStatus('✅ Câmera pronta — Tire outra foto!');
+    }
+
+    // ─── Alterna câmera ───
+    document.getElementById('btn-flip').addEventListener('click', async () => {
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+      }
+      currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+      await initCamera();
+    });
+
+    // ─── Atualiza status ───
+    function updateStatus(message) {
+      cameraStatus = message;
+      refreshStatus();
+    }
+
+    // ─── Inicia ao carregar ───
+    window.addEventListener('load', () => {
+      initSocket();
+      initCamera();
+      // Alguns Androids só iniciam vídeo após interação do usuário.
+      document.body.addEventListener('click', async () => {
+        const video = document.getElementById('camera-stream');
+        if (!videoStream || (video && video.paused)) {
+          await initCamera();
+        }
+      }, { once: true });
+    });
+
+    // ─── Limpa ao sair ───
+    window.addEventListener('beforeunload', () => {
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+      }
+    });
+  </script>
+</body>
+</html>
