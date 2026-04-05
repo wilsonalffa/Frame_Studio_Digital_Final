@@ -4,6 +4,40 @@
 #  + Proxy para API do Gemini (Google AI Studio - gratuito)
 # ═══════════════════════════════════════════════════════════
 
+"""
+MAPA FUNCIONAL DO BACKEND (RESUMO PARA IA)
+
+1) Autenticacao e sessao
+- Login/logout com Flask session.
+- Controle de acesso por perfil usando login_required e admin_required.
+
+2) Camada de banco hibrida (SQLite + Postgres)
+- ConnectionCompat uniformiza queries com placeholders entre SQLite (?) e Postgres (%s).
+- get_db escolhe backend por variaveis de ambiente e reutiliza conexao no escopo da requisicao.
+
+3) Multiunidade (stores/users)
+- Cada unidade possui loja (stores) e usuario de acesso (users).
+- Bootstrap cria/atualiza usuario admin principal com base em variaveis FF_*.
+
+4) CRM e orcamentos
+- clientes: cadastro, edicao, remocao, historico.
+- consultas: dados comerciais (status, total, config, pagamentos e imagem preview).
+
+5) Estado persistente do frontend por loja
+- store_state guarda JSON por escopo (catalog, rooms) para catalogo e simulador de ambientes.
+
+6) Inteligencia operacional (admin)
+- /api/stores: gestao de unidades e acessos.
+- /api/admin/dashboard: metricas consolidadas por unidade e totais globais.
+- users.last_login_at/login_count para monitoramento de uso.
+
+7) IA de analise de arte
+- Endpoint dedicado usa Gemini via chave GEMINI_API_KEY/GOOGLE_API_KEY.
+
+Observacao
+- Este arquivo concentra regras de negocio e migracoes leves de esquema (ensure_column no init_db).
+"""
+
 import os
 import json
 import re
@@ -750,6 +784,15 @@ def admin_required(f):
 @app.context_processor
 def inject_current_user():
     return {'current_user': get_authenticated_user()}
+
+# ── Mapa de rotas (alto nivel) ────────────────────────────
+# /login, /logout, /
+# /api/stores*              -> administracao de unidades e logins
+# /api/admin/dashboard      -> monitoramento operacional
+# /api/clientes*            -> CRM por unidade
+# /api/consultas*           -> orcamentos e historico comercial
+# /api/store-state/<scope>  -> estado JSON do catalogo/simulador
+# /analisar-arte            -> proxy IA Gemini
 
 # ── Autenticacao ──────────────────────────────────────────
 @app.route('/login', methods=['GET', 'POST'])

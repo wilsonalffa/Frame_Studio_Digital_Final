@@ -1,3 +1,28 @@
+<!--
+MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
+
+1) Estrutura geral
+- Aplicacao de pagina unica com abas internas controladas por JS (switchTab).
+- Rotas renderizadas no backend Flask + dados dinâmicos Jinja (current_user, guardas admin).
+
+2) Modulos de interface
+- Imagem & Qualidade: analise de resolucao e tamanho recomendado.
+- Divisao de Painel (canvas): cortes, sangria e exportacao.
+- Simulacao de Quadro: mockup de moldura/passepartout.
+- Simulador de Ambiente: parede, drag-and-drop e multiplos quadros.
+- Clientes: CRM, historico e atendimento.
+- Catalogo: itens, pastas e simulacoes persistidas por loja.
+- Administracao: unidades/logins e dashboard gerencial.
+
+3) Integracoes front-end
+- static/assets/js/script.js: funcoes globais, catalogo, clientes e admin.
+- static/assets/js/wall_simulator.js: render do simulador de ambiente.
+- static/assets/css/styles.css: identidade visual principal.
+
+4) Convencoes importantes
+- IDs e handlers inline (onclick/oninput) sao contrato com o JS global.
+- Mudancas de id/estrutura devem ser refletidas imediatamente nos scripts.
+-->
 <!DOCTYPE html>
 <html lang="pt-BR">
 

@@ -1,3 +1,24 @@
+/*
+MAPA FUNCIONAL DO CSS (styles.css)
+
+1) Sistema visual
+- Define tokens de cor e variaveis semanticas da marca.
+- Mantem consistencia entre header, nav, cards, botoes e feedback visual.
+
+2) Estrutura e layout
+- Regras globais de reset.
+- Cabecalho fixo, hero, secoes por aba e componentes reutilizaveis.
+
+3) Componentes de interface
+- Navegacao superior, botoes, tabelas, formularios, cards e modais.
+- Classes de estados ativos/hover/selecionado.
+
+4) Responsividade
+- Ajustes para desktop e mobile nas areas principais da aplicacao.
+
+Observacao
+- Parte do estilo tambem existe inline em templates para modulos especificos.
+*/
 /* ===== VARIÁVEIS CSS ===== */
 :root {
   /* CORES PRINCIPAIS FAST FRAME */

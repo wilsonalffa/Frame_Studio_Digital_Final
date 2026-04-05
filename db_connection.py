@@ -1,6 +1,13 @@
 """
 Abstração de conexão de banco: suporta SQLite (local) e Postgres (Supabase)
 Use DEBUG_DB_TYPE para forçar um tipo durante testes; caso contrário, prioriza DIRECT_URL
+
+MAPA FUNCIONAL (db_connection.py)
+- get_db_type(): decide backend efetivo por variavel de ambiente.
+- get_db(): abre conexao no backend escolhido para scripts utilitarios.
+
+Observacao
+- Este modulo e de apoio; o fluxo principal da aplicacao usa a camada de conexao em app.py.
 """
 import os
 import sqlite3

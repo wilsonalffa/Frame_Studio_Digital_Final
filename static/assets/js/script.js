@@ -2,6 +2,42 @@
 //  FAST FRAME — script.js  (auditado, sem declarações duplicadas)
 // ═══════════════════════════════════════════════════════════
 
+/*
+MAPA FUNCIONAL DO FRONTEND (script.js)
+
+1) Navegacao e estado global
+- switchTab controla abas da SPA e sincroniza desktop/mobile nav.
+- Estados globais por modulo (q*, c*, sq*, wall, catalogo, clientes, admin).
+
+2) Pipeline de imagem
+- Upload/drag-drop para imagem e PDF.
+- Conversao HEIC/HEIF para JPEG (heic2any).
+- Render em canvas para qualidade, cortes e simulacoes.
+
+3) Qualidade e producao
+- Calculo de DPI por tamanho em cm.
+- Sugestao de formatos e indicador visual de qualidade.
+- Exportacao em JPG/PDF e nomeacao padrao de arquivos.
+
+4) Simuladores
+- Simulacao de quadro individual (moldura, passepartout, medidas).
+- Simulacao de ambiente integra wall_simulator.js.
+
+5) Catalogo e persistencia
+- Catalogo por loja (itens/pastas/simulacoes) via /api/store-state/catalog.
+- Migracao de legado localStorage/IndexedDB para store_state no backend.
+
+6) CRM e atendimento
+- CRUD de clientes, historico e consultas/orcamentos via API Flask.
+
+7) Administracao e monitoramento
+- Gestao de unidades e logins (/api/stores).
+- Dashboard administrativo consolidado (/api/admin/dashboard).
+
+Observacao
+- Este arquivo usa handlers globais chamados diretamente no HTML.
+*/
+
 // ── Estado global ──
 let qImg=null, cImg=null, wEnvImg=null, wArtImg=null;
 let customW=null, customH=null;

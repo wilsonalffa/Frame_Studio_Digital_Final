@@ -4,6 +4,30 @@
 //  e adiciona sistema de múltiplos quadros com drag interativo
 // ═══════════════════════════════════════════════════════════
 
+/*
+MAPA FUNCIONAL (wall_simulator.js)
+
+1) Estado da cena
+- Mantem lista de quadros posicionados na parede (wallFrames).
+- Controla selecao, drag, resize, guias e render pendente.
+
+2) Modelagem do quadro
+- Cada quadro guarda arte, dimensoes fisicas, moldura, passepartout e sombra.
+
+3) Interacao
+- Clique para selecionar.
+- Drag-and-drop para reposicionar.
+- Handles para redimensionar mantendo controles visuais.
+
+4) Renderizacao
+- Desenha ambiente + quadros em canvas com escala por cm.
+- Aplica sombra, moldura e passepartout durante desenho.
+
+5) Integracao com UI principal
+- Le inputs de tamanho/posicao da aba simulador.
+- Exporta imagem final e atualiza previews quando estado muda.
+*/
+
 // ── Estado dos quadros na parede ──────────────────────────
 let wallFrames = [];          // Array de quadros na cena
 let wallSelectedIdx = -1;     // Índice do quadro selecionado
