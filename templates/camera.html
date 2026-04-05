@@ -380,30 +380,66 @@
         const reader = new FileReader();
         
         reader.onload = async () => {
-          const base64 = reader.result;
+          try {
+            const base64 = reader.result;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-          const response = await fetch('/api/upload-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              image: base64,
-              mimeType: 'image/jpeg'
-            })
-          });
+            const response = await fetch('/api/upload-image', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({
+                image: base64,
+                mimeType: 'image/jpeg'
+              }),
+              signal: controller.signal
+            });
 
-          if (response.ok) {
-            const result = await response.json();
-            updateStatus(`✅ Enviada! ${result.width}x${result.height}px`);
-            retakePhoto();
-            
-            // Reset após 3 segundos
-            setTimeout(() => {
-              document.getElementById('previewModal').classList.remove('active');
-              updateStatus('✅ Câmera pronta — Tire outra foto!');
-            }, 3000);
-          } else {
-            updateStatus('❌ Erro ao enviar');
+            clearTimeout(timeoutId);
+
+            const contentType = (response.headers.get('content-type') || '').toLowerCase();
+            const responseText = await response.text();
+
+            let payload = null;
+            if (contentType.includes('application/json')) {
+              try {
+                payload = JSON.parse(responseText);
+              } catch (_err) {
+                payload = null;
+              }
+            }
+
+            if (response.ok && payload && payload.ok) {
+              updateStatus(`✅ Enviada! ${payload.width}x${payload.height}px`);
+              retakePhoto();
+
+              // Reset após 3 segundos
+              setTimeout(() => {
+                document.getElementById('previewModal').classList.remove('active');
+                updateStatus('✅ Câmera pronta — Tire outra foto!');
+              }, 3000);
+              return;
+            }
+
+            if (response.status === 401 || response.url.includes('/login') || contentType.includes('text/html')) {
+              updateStatus('🔒 Sessão expirada no celular. Faça login novamente e tente enviar.');
+              return;
+            }
+
+            const serverMsg = (payload && (payload.error || payload.erro)) || `HTTP ${response.status}`;
+            updateStatus(`❌ Falha no envio: ${serverMsg}`);
+          } catch (err) {
+            if (err && err.name === 'AbortError') {
+              updateStatus('⏱️ Tempo de envio esgotado. Tente novamente com internet estável.');
+              return;
+            }
+            updateStatus(`❌ Erro ao enviar: ${err.message}`);
           }
+        };
+
+        reader.onerror = () => {
+          updateStatus('❌ Não foi possível ler a foto capturada.');
         };
 
         reader.readAsDataURL(lastPhotoBlob);
