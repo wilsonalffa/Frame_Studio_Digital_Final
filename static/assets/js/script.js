@@ -4394,6 +4394,62 @@ async function atualizarStatusCliente(clienteId, novoStatus) {
   }
 }
 
+function _limparPainelHistoricoCliente() {
+  _clienteSelecionadoId = null;
+  _clienteHistoricoAtual = null;
+  _historicoPorId = {};
+  _historicoListaAtual = [];
+  _historicoSelecionados.clear();
+
+  const historicoList = document.getElementById('historicoList');
+  const historicoTitulo = document.getElementById('historicoTitulo');
+  if (historicoList) historicoList.innerHTML = '';
+  if (historicoTitulo) historicoTitulo.textContent = 'Selecione um cliente para ver os atendimentos.';
+
+  _atualizarResumoSelecaoHistorico();
+  _renderResumoClienteHistorico(null, []);
+}
+
+function _removerClienteDaTela(clienteId) {
+  delete _clientesPorId[clienteId];
+
+  const clienteCard = document.getElementById('cliente-card-' + clienteId);
+  if (clienteCard) clienteCard.remove();
+
+  if (_clienteSelecionadoId === clienteId) {
+    _limparPainelHistoricoCliente();
+  }
+
+  const listEl = document.getElementById('clientesList');
+  if (listEl && !listEl.children.length) {
+    listEl.innerHTML = '<div style="padding:12px;border:1px dashed var(--border);border-radius:6px;color:var(--gray);font-size:13px">Nenhum cliente cadastrado.</div>';
+  }
+}
+
+function _removerHistoricoDaTela(clienteId, consultaId) {
+  delete _historicoPorId[consultaId];
+  _historicoListaAtual = (_historicoListaAtual || []).filter(h => h.id !== consultaId);
+  _historicoSelecionados.delete(consultaId);
+
+  const historicoCard = document.getElementById('historico-card-' + consultaId);
+  if (historicoCard) historicoCard.remove();
+
+  const cliente = _clientesPorId[clienteId];
+  if (cliente) {
+    cliente.total_consultas = Math.max(0, Number(cliente.total_consultas || 0) - 1);
+    if (!cliente.total_consultas) {
+      cliente.ultima_consulta = '';
+    }
+  }
+
+  _atualizarResumoSelecaoHistorico();
+
+  const listEl = document.getElementById('historicoList');
+  if (listEl && !listEl.children.length) {
+    listEl.innerHTML = '<div style="padding:12px;border:1px dashed var(--border);border-radius:6px;color:var(--gray);font-size:13px">Esse cliente ainda não possui atendimentos salvos.</div>';
+  }
+}
+
 async function excluirUltimoOrcamentoCliente(clienteId) {
   const cli = _clientesPorId[clienteId];
   if (!cli) {
@@ -4412,19 +4468,9 @@ async function excluirUltimoOrcamentoCliente(clienteId) {
       if (!okCli) return;
 
       await _ffApi('/api/clientes/' + clienteId, { method: 'DELETE' });
-      if (_clienteSelecionadoId === clienteId) {
-        _clienteSelecionadoId = null;
-        _clienteHistoricoAtual = null;
-        _historicoListaAtual = [];
-        _historicoSelecionados.clear();
-        const historicoList = document.getElementById('historicoList');
-        const historicoTitulo = document.getElementById('historicoTitulo');
-        if (historicoList) historicoList.innerHTML = '';
-        if (historicoTitulo) historicoTitulo.textContent = 'Selecione um cliente para ver os atendimentos.';
-        _atualizarResumoSelecaoHistorico();
-      }
+      _removerClienteDaTela(clienteId);
       toast('Cliente excluido com sucesso.');
-      await carregarClientes();
+      carregarClientes();
       return;
     }
 
@@ -4439,11 +4485,12 @@ async function excluirUltimoOrcamentoCliente(clienteId) {
     if (!ok) return;
 
     await _ffApi('/api/consultas/' + ultimo.id, { method: 'DELETE' });
+    _removerHistoricoDaTela(clienteId, ultimo.id);
     toast('Ultimo orcamento excluido com sucesso.');
 
-    await carregarClientes();
+    carregarClientes();
     if (_clienteSelecionadoId === clienteId) {
-      await carregarHistoricoCliente(clienteId);
+      carregarHistoricoCliente(clienteId);
     }
   } catch (err) {
     toast(err.message || 'Erro ao excluir o orcamento.');
@@ -4631,7 +4678,7 @@ async function carregarClientes() {
       }
 
       return (
-        '<div style="border:1px solid ' + (ativo ? 'var(--gold)' : 'var(--border2)') + ';background:#fff;border-radius:8px;padding:10px">' +
+        '<div id="cliente-card-' + c.id + '" style="border:1px solid ' + (ativo ? 'var(--gold)' : 'var(--border2)') + ';background:#fff;border-radius:8px;padding:10px">' +
           '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">' +
             '<div>' +
               '<div style="font-size:14px;color:var(--brown);font-weight:700">' + _esc(c.nome) + '</div>' +
@@ -4722,7 +4769,7 @@ async function carregarHistoricoCliente(clienteId) {
           '</div>')
         : ('<div style="margin-top:8px;font-size:11px;color:var(--brown);font-weight:700"><strong>Valor:</strong> ' + _esc(_fmtMoeda(preco)) + '</div>');
       return (
-        '<div style="border:1px solid var(--border2);border-radius:8px;padding:12px;background:#fff;position:relative">' +
+        '<div id="historico-card-' + h.id + '" style="border:1px solid var(--border2);border-radius:8px;padding:12px;background:#fff;position:relative">' +
           '<div style="position:absolute;left:-1px;top:12px;bottom:12px;width:4px;border-radius:4px;background:' + _statusCor(status) + '"></div>' +
           '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
             '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray);cursor:pointer">' +

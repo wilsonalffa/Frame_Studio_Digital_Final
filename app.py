@@ -42,19 +42,28 @@ import os
 import json
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import urllib.request
 import urllib.error
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, has_request_context
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from functools import wraps
+import base64
+from PIL import Image
+from io import BytesIO
+import uuid
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 
 load_dotenv()  # Carrega variaveis do arquivo .env local
 
+# Inicializacao do Flask e SocketIO
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+active_sessions = {}  # Dicionario para monitorar sessoes ativas por usuario_id
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -273,15 +282,22 @@ def default_store_state(scope):
     return json.loads(json.dumps(STORE_STATE_DEFAULTS[normalized], ensure_ascii=False))
 
 
+def decode_json_field(raw_value, fallback):
+    if raw_value is None:
+        return fallback
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+        except Exception:
+            return fallback
+    else:
+        parsed = raw_value
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
 def decode_store_state(scope, raw_json):
     fallback = default_store_state(scope)
-    if raw_json is None:
-        return fallback
-    try:
-        parsed = json.loads(raw_json)
-    except Exception:
-        return fallback
-    return parsed if isinstance(parsed, dict) else fallback
+    return decode_json_field(raw_json, fallback)
 
 
 def load_store_state(conn, store_id, scope):
@@ -645,6 +661,19 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_consultas_cliente ON consultas(cliente_id);
             CREATE INDEX IF NOT EXISTS idx_consultas_data ON consultas(created_at);
             CREATE INDEX IF NOT EXISTS idx_store_state_store_scope ON store_state(store_id, scope);
+
+            CREATE TABLE IF NOT EXISTS frames_cache (
+                id TEXT PRIMARY KEY,
+                store_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                image_b64 TEXT NOT NULL,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (store_id) REFERENCES stores(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_frames_store_time ON frames_cache(store_id, created_at);
             '''
             )
 
@@ -753,8 +782,8 @@ def row_to_consulta(row):
         'total': row['total'] or 0,
         'detalhes': row['detalhes'] or '',
         'observacoes': row['observacoes'] or '',
-        'pagamentos': json.loads(row['pagamentos_json']) if row['pagamentos_json'] else [],
-        'config': json.loads(row['config_json']) if row['config_json'] else {},
+        'pagamentos': decode_json_field(row['pagamentos_json'], []),
+        'config': decode_json_field(row['config_json'], {}),
         'imagem_preview': row['imagem_preview'] or '',
         'created_at': row['created_at'],
     }
@@ -779,6 +808,138 @@ def admin_required(f):
             return jsonify({'error': 'Acesso restrito ao administrador.'}), 403
         return f(*args, **kwargs)
     return decorated
+
+
+# ── SocketIO: eventos de conexao por loja ─────────────────
+
+@socketio.on('connect')
+def handle_connect():
+    user_id = session.get('user_id')
+    store_id = session.get('store_id')
+
+    if not user_id or not store_id:
+        return False  # Rejeita conexao se usuario nao autenticado
+
+    if store_id not in active_sessions:
+        active_sessions[store_id] = {}
+
+    active_sessions[store_id][user_id] = request.sid
+    join_room(str(store_id))
+    emit('connection_response', {
+        'status': 'connected',
+        'user_id': user_id,
+        'store_id': store_id,
+        'socketioId': request.sid,
+    })
+    print(f"✅ Usuario {user_id} conectado (store {store_id})")
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    user_id = session.get('user_id')
+    store_id = session.get('store_id')
+
+    if store_id and store_id in active_sessions:
+        active_sessions[store_id].pop(user_id, None)
+        print(f"❌ Usuario {user_id} desconectado (store {store_id})")
+
+
+# ── Upload de imagem via mobile (envia para desktop em tempo real) ──
+
+@app.route('/api/upload-image', methods=['POST'])
+@login_required
+def upload_frame():
+    """
+    Recebe imagem do mobile, comprime e notifica todos conectados nesta loja via SocketIO.
+
+    Body JSON esperado:
+      - image:    string base64 (com ou sem prefixo data URI)
+      - mimeType: 'image/jpeg' | 'image/png'  (opcional, default jpeg)
+    """
+    try:
+        store_id = current_store_id()
+        user_id = current_user_id()
+        data = request.get_json()
+
+        if not data or 'image' not in data:
+            return jsonify({'error': 'Imagem nao fornecida.'}), 400
+
+        raw_b64 = data['image']
+        mime_type = data.get('mimeType', 'image/jpeg')
+
+        # Decodifica removendo prefixo data URI se presente
+        image_bytes = base64.b64decode(raw_b64.split(',')[-1])
+        img = Image.open(BytesIO(image_bytes))
+
+        # Redimensiona se necessario (max 2000px em qualquer dimensao)
+        if img.width > 2000 or img.height > 2000:
+            img.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
+
+        # Comprime para JPEG
+        output = BytesIO()
+        img.save(output, format='JPEG', quality=85, optimize=True)
+        compressed_b64 = base64.b64encode(output.getvalue()).decode('utf-8')
+
+        agora = now_iso()
+        frame_id = str(uuid.uuid4())[:12]
+
+        # Persiste no banco
+        with get_db() as conn:
+            conn.execute(
+                '''
+                INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    frame_id,
+                    store_id,
+                    user_id,
+                    f"data:{mime_type};base64,{compressed_b64}",
+                    json.dumps({
+                        'original_size': len(image_bytes),
+                        'compressed_size': len(compressed_b64),
+                        'width': img.width,
+                        'height': img.height,
+                    }),
+                    agora,
+                ),
+            )
+
+        # Notifica todos os clientes da mesma loja em tempo real
+        socketio.emit(
+            'new_frame',
+            {
+                'frame_id': frame_id,
+                'image_url': f"data:{mime_type};base64,{compressed_b64}",
+                'uploaded_by': user_id,
+                'timestamp': agora,
+                'width': img.width,
+                'height': img.height,
+            },
+            room=str(store_id),
+        )
+
+        return jsonify({
+            'ok': True,
+            'frame_id': frame_id,
+            'width': img.width,
+            'height': img.height,
+            'message': 'Imagem enviada com sucesso.',
+        })
+
+    except Exception as e:
+        return jsonify({'error': 'Falha ao processar a imagem.', 'details': str(e)}), 500
+
+
+@app.route('/api/cleanup-frames', methods=['POST'])
+@admin_required
+def cleanup_frames():
+    """Remove frames com mais de 7 dias."""
+    cutoff = (datetime.now() - timedelta(days=7)).isoformat(timespec='seconds')
+    with get_db() as conn:
+        cur = conn.execute('DELETE FROM frames_cache WHERE created_at < ?', (cutoff,))
+    removed = cur._cursor.rowcount if hasattr(cur, '_cursor') else None
+    return jsonify({'ok': True, 'message': 'Limpeza concluida', 'removed': removed})
 
 
 @app.context_processor
@@ -1095,7 +1256,7 @@ def admin_dashboard():
     catalog_by_store = {}
     for sr in state_rows:
         try:
-            data = json.loads(sr['data_json']) if sr['data_json'] else {}
+            data = decode_json_field(sr['data_json'], {})
             catalog_by_store[sr['store_id']] = {
                 'items': len(data.get('items') or []),
                 'sims': len(data.get('sims') or []),
@@ -1678,10 +1839,16 @@ def describe_image():
         return jsonify({'error': f'Erro Gemini: {e.code}'}), e.code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+@app.route('/camera')
+@login_required
+def camera_page():
+    """Página de câmera mobile"""
+    return render_template('camera.html')
 
 
 init_db()
 
 # ── Inicializacao ─────────────────────────────────────────
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
