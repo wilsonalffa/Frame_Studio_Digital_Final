@@ -286,11 +286,16 @@ class CameraSync {
   constructor() {
     this.socket = null;
     this.isConnected = false;
+    this.pollingHealthy = false;
     this.mobileCount = 0;
     this.incomingFrames = [];
     this._modalReady = false;
     this.cameraUrl = `${window.location.origin}/camera`;
     this.qrCode = null;
+    this.pollTimer = null;
+    this.lastFrameId = '';
+    this.initialPollDone = false;
+    this.pageStartedAt = Date.now();
   }
 
   // ── WebSocket ──────────────────────────────────────────
@@ -326,6 +331,46 @@ class CameraSync {
       this.mobileCount = 0;
       this.updateSyncStatus();
     });
+
+    this.startPollingFallback();
+  }
+
+  async pollFallback() {
+    try {
+      const [presenceResp, frameResp] = await Promise.all([
+        fetch('/api/camera/presence', { credentials: 'same-origin', cache: 'no-store' }),
+        fetch(`/api/camera/latest-frame?after_id=${encodeURIComponent(this.lastFrameId || '')}`, { credentials: 'same-origin', cache: 'no-store' }),
+      ]);
+
+      if (presenceResp.ok) {
+        const presence = await presenceResp.json();
+        this.mobileCount = Number(presence && presence.mobile_count) || 0;
+        this.pollingHealthy = true;
+        this.updateSyncStatus();
+      }
+
+      if (frameResp.ok) {
+        const payload = await frameResp.json();
+        const frame = payload && payload.frame;
+        if (frame && frame.frame_id && frame.frame_id !== this.lastFrameId) {
+          const frameTime = Date.parse(frame.timestamp || '') || 0;
+          const suppressInitial = !this.initialPollDone && frameTime && frameTime < (this.pageStartedAt - 5000);
+          this.lastFrameId = frame.frame_id;
+          if (!suppressInitial) this.handleNewFrame(frame);
+        }
+      }
+    } catch (_err) {
+      this.pollingHealthy = false;
+      this.updateSyncStatus();
+    } finally {
+      this.initialPollDone = true;
+    }
+  }
+
+  startPollingFallback() {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollFallback();
+    this.pollTimer = setInterval(() => this.pollFallback(), 3000);
   }
 
   // ── Recebe nova foto ───────────────────────────────────
@@ -574,7 +619,7 @@ class CameraSync {
       const header = document.querySelector('header');
       if (header) header.appendChild(el);
     }
-    if (!this.isConnected || this.mobileCount < 1) {
+    if ((!this.isConnected && !this.pollingHealthy) || this.mobileCount < 1) {
       el.textContent = '';
       el.style.display = 'none';
       return;
@@ -587,7 +632,9 @@ class CameraSync {
 
   disconnect() {
     if (this.socket) this.socket.disconnect();
+    if (this.pollTimer) clearInterval(this.pollTimer);
     this.isConnected = false;
+    this.pollingHealthy = false;
     this.mobileCount = 0;
     this.updateSyncStatus();
   }

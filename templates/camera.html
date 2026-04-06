@@ -215,6 +215,7 @@
     let lastPhotoBlob = null;
     let socket = null;
     const socketAuthToken = "{{ socket_auth_token|default('', true) }}";
+    let heartbeatTimer = null;
     let socketStatus = '📡 Conectando...';
     let cameraStatus = '📱 Preparando câmera...';
 
@@ -236,6 +237,28 @@
         throw new Error('getUserMedia indisponível');
       }
       return new Promise((resolve, reject) => legacy.call(navigator, constraints, resolve, reject));
+    }
+
+    async function sendHeartbeat() {
+      try {
+        const response = await fetch('/api/camera/heartbeat', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        if (response.ok && (!socket || !socket.connected)) {
+          socketStatus = '🟡 Sync via web';
+          refreshStatus();
+        }
+      } catch (_err) {
+        // Ignora falhas pontuais do heartbeat.
+      }
+    }
+
+    function startHeartbeat() {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      sendHeartbeat();
+      heartbeatTimer = setInterval(sendHeartbeat, 8000);
     }
 
     // ─── Conecta WebSocket ───
@@ -493,6 +516,7 @@
     // ─── Inicia ao carregar ───
     window.addEventListener('load', () => {
       initSocket();
+      startHeartbeat();
       initCamera();
       // Alguns Androids só iniciam vídeo após interação do usuário.
       document.body.addEventListener('click', async () => {
@@ -507,6 +531,10 @@
     window.addEventListener('beforeunload', () => {
       if (videoStream) {
         videoStream.getTracks().forEach(track => track.stop());
+      }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
     });
   </script>

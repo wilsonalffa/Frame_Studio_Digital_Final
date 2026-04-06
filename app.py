@@ -66,6 +66,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 active_sessions = {}  # {store_id: {'desktop': set(sids), 'mobile': set(sids), 'unknown': set(sids)}}
 socket_clients = {}  # {sid: {'store_id': int, 'user_id': int, 'device_type': str}}
+camera_heartbeats = {}  # {store_id: datetime}
 
 
 def normalize_socket_device(value):
@@ -111,6 +112,23 @@ def emit_camera_presence(store_id):
         },
         room=str(store_id),
     )
+
+
+def touch_camera_heartbeat(store_id):
+    if store_id:
+        camera_heartbeats[int(store_id)] = datetime.utcnow()
+
+
+def get_camera_presence_snapshot(store_id):
+    if not store_id:
+        return {'mobile_count': 0, 'mobile_connected': False}
+    last_seen = camera_heartbeats.get(int(store_id))
+    active = bool(last_seen and (datetime.utcnow() - last_seen) <= timedelta(seconds=20))
+    return {
+        'mobile_count': 1 if active else 0,
+        'mobile_connected': active,
+        'last_seen_at': last_seen.isoformat() if active else None,
+    }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -1980,6 +1998,57 @@ def chat_proxy():
         return jsonify({'error': f'Erro Gemini: {e.code}', 'detail': err_body}), e.code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/camera/heartbeat', methods=['POST'])
+@login_required
+def camera_heartbeat():
+    store_id = current_store_id()
+    touch_camera_heartbeat(store_id)
+    snapshot = get_camera_presence_snapshot(store_id)
+    return jsonify({'ok': True, **snapshot})
+
+
+@app.route('/api/camera/presence', methods=['GET'])
+@login_required
+def camera_presence_status():
+    store_id = current_store_id()
+    snapshot = get_camera_presence_snapshot(store_id)
+    return jsonify({'ok': True, **snapshot})
+
+
+@app.route('/api/camera/latest-frame', methods=['GET'])
+@login_required
+def latest_camera_frame():
+    store_id = current_store_id()
+    after_id = str(request.args.get('after_id') or '').strip()
+
+    with get_db() as conn:
+        row = conn.execute(
+            '''
+            SELECT id, image_b64, metadata, created_at
+            FROM frames_cache
+            WHERE store_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            ''',
+            (store_id,)
+        ).fetchone()
+
+    if not row or (after_id and row['id'] == after_id):
+        return jsonify({'ok': True, 'frame': None})
+
+    metadata = decode_json_field(row['metadata'], {}) if row['metadata'] is not None else {}
+    return jsonify({
+        'ok': True,
+        'frame': {
+            'frame_id': row['id'],
+            'image_url': row['image_b64'],
+            'timestamp': row['created_at'],
+            'width': int(metadata.get('width') or 0),
+            'height': int(metadata.get('height') or 0),
+        }
+    })
 
 # ── Sugestao de nome pela imagem (Gemini Vision) ─────────
 @app.route('/api/describe-image', methods=['POST'])
