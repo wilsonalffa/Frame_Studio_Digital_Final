@@ -241,6 +241,7 @@
     function initSocket() {
       socket = io('/', {
         query: { device: 'mobile' },
+        withCredentials: true,
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionAttempts: 5
@@ -253,6 +254,16 @@
 
       socket.on('disconnect', () => {
         socketStatus = '🔴 Desconectado';
+        refreshStatus();
+      });
+
+      socket.on('connect_error', () => {
+        socketStatus = '⚠️ Sem sync em tempo real';
+        refreshStatus();
+      });
+
+      socket.on('reconnect_attempt', () => {
+        socketStatus = '🔄 Tentando reconectar...';
         refreshStatus();
       });
 
@@ -370,9 +381,14 @@
 
     // ─── Envia foto para servidor ───
     async function sendPhoto() {
-      if (!lastPhotoBlob || !socket || !socket.connected) {
-        updateStatus('❌ Erro: Câmera ou conexão indisponível');
+      if (!lastPhotoBlob) {
+        updateStatus('❌ Erro: tire uma foto antes de enviar');
         return;
+      }
+
+      if (!socket || !socket.connected) {
+        socketStatus = '⚠️ Sem sync em tempo real';
+        refreshStatus();
       }
 
       try {
