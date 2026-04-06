@@ -940,11 +940,13 @@ def admin_required(f):
 
 @socketio.on('connect')
 def handle_connect():
-    user_id = session.get('user_id')
-    store_id = session.get('store_id')
+    user = get_authenticated_user()
+    user_id = user['id'] if user else session.get('user_id')
+    store_id = user['store_id'] if user else session.get('store_id')
     device_type = normalize_socket_device(request.args.get('device'))
 
     if not user_id or not store_id:
+        print(f"⚠️ Socket rejeitado: sessao invalida (sid={request.sid}, device={device_type})")
         return False  # Rejeita conexao se usuario nao autenticado
 
     store_sessions = active_sessions.setdefault(
