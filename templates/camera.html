@@ -214,6 +214,7 @@
     let currentFacingMode = 'environment'; // 'environment' = câmera traseira
     let lastPhotoBlob = null;
     let socket = null;
+    const socketAuthToken = "{{ socket_auth_token|default('', true) }}";
     let socketStatus = '📡 Conectando...';
     let cameraStatus = '📱 Preparando câmera...';
 
@@ -240,7 +241,10 @@
     // ─── Conecta WebSocket ───
     function initSocket() {
       socket = io('/', {
-        query: { device: 'mobile' },
+        query: {
+          device: 'mobile',
+          socket_auth: socketAuthToken
+        },
         withCredentials: true,
         reconnection: true,
         reconnectionDelay: 1000,

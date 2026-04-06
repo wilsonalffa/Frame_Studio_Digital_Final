@@ -56,6 +56,7 @@ from io import BytesIO
 import uuid
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
+from itsdangerous import URLSafeSerializer, BadSignature
 
 load_dotenv()  # Carrega variaveis do arquivo .env local
 
@@ -72,6 +73,28 @@ def normalize_socket_device(value):
     if device in ('desktop', 'mobile'):
         return device
     return 'unknown'
+
+
+def build_socket_auth_token(user_id, store_id):
+    serializer = URLSafeSerializer(app.secret_key, salt=SOCKET_AUTH_SALT)
+    return serializer.dumps({'user_id': int(user_id), 'store_id': int(store_id)})
+
+
+def parse_socket_auth_token(token):
+    if not token:
+        return None
+    serializer = URLSafeSerializer(app.secret_key, salt=SOCKET_AUTH_SALT)
+    try:
+        payload = serializer.loads(token)
+    except BadSignature:
+        return None
+    try:
+        return {
+            'user_id': int(payload.get('user_id')),
+            'store_id': int(payload.get('store_id')),
+        }
+    except Exception:
+        return None
 
 
 def emit_camera_presence(store_id):
@@ -126,6 +149,7 @@ STORE_STATE_DEFAULTS = {
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY', '')
 # Modelo padrão ativo para novos projetos na API v1beta.
 GEMINI_MODEL = (os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash') or 'gemini-2.5-flash').replace('models/', '')
+SOCKET_AUTH_SALT = 'fastframe-socket-auth-v1'
 
 
 class CursorCompat:
@@ -944,6 +968,12 @@ def handle_connect():
     user_id = user['id'] if user else session.get('user_id')
     store_id = user['store_id'] if user else session.get('store_id')
     device_type = normalize_socket_device(request.args.get('device'))
+
+    if not user_id or not store_id:
+        socket_auth = parse_socket_auth_token(request.args.get('socket_auth'))
+        if socket_auth:
+            user_id = socket_auth['user_id']
+            store_id = socket_auth['store_id']
 
     if not user_id or not store_id:
         print(f"⚠️ Socket rejeitado: sessao invalida (sid={request.sid}, device={device_type})")
@@ -2011,7 +2041,11 @@ def describe_image():
 @login_required
 def camera_page():
     """Página de câmera mobile"""
-    return render_template('camera.html')
+    user = get_authenticated_user()
+    socket_auth_token = ''
+    if user and user.get('id') and user.get('store_id'):
+        socket_auth_token = build_socket_auth_token(user['id'], user['store_id'])
+    return render_template('camera.html', socket_auth_token=socket_auth_token)
 
 
 init_db()
