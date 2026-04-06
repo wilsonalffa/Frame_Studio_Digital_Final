@@ -4,6 +4,9 @@
 #  + Proxy para API do Gemini (Google AI Studio - gratuito)
 # ═══════════════════════════════════════════════════════════
 
+import eventlet
+eventlet.monkey_patch()
+
 """
 MAPA FUNCIONAL DO BACKEND (RESUMO PARA IA)
 
@@ -67,6 +70,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 active_sessions = {}  # {store_id: {'desktop': set(sids), 'mobile': set(sids), 'unknown': set(sids)}}
 socket_clients = {}  # {sid: {'store_id': int, 'user_id': int, 'device_type': str}}
 camera_heartbeats = {}  # {store_id: datetime}
+camera_latest_frames = {}  # {store_id: {'frame_id', 'image_url', 'uploaded_by', 'timestamp', 'width', 'height'}}
 
 
 def normalize_socket_device(value):
@@ -1084,60 +1088,73 @@ def upload_frame():
             'height': img.height,
         }
 
-        # Persiste no banco
-        with get_db() as conn:
-            if conn.backend == 'postgres':
-                conn.execute(
-                    '''
-                    INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
-                    VALUES (?, ?, ?, ?, ?::jsonb, ?::timestamptz)
-                    ''',
-                    (
-                        frame_id,
-                        store_id,
-                        user_id,
-                        f"data:{mime_type};base64,{compressed_b64}",
-                        json.dumps(metadata_payload),
-                        agora,
-                    ),
-                )
-            else:
-                conn.execute(
-                    '''
-                    INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''',
-                    (
-                        frame_id,
-                        store_id,
-                        user_id,
-                        f"data:{mime_type};base64,{compressed_b64}",
-                        json.dumps(metadata_payload),
-                        agora,
-                    ),
-                )
+        frame_payload = {
+            'frame_id': frame_id,
+            'image_url': f"data:{mime_type};base64,{compressed_b64}",
+            'uploaded_by': user_id,
+            'timestamp': agora,
+            'width': img.width,
+            'height': img.height,
+        }
 
-        # Notifica todos os clientes da mesma loja em tempo real
-        socketio.emit(
-            'new_frame',
-            {
-                'frame_id': frame_id,
-                'image_url': f"data:{mime_type};base64,{compressed_b64}",
-                'uploaded_by': user_id,
-                'timestamp': agora,
-                'width': img.width,
-                'height': img.height,
-            },
-            room=str(store_id),
-        )
+        persisted = True
+        try:
+            # Persiste no banco
+            with get_db() as conn:
+                if conn.backend == 'postgres':
+                    conn.execute(
+                        '''
+                        INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
+                        VALUES (?, ?, ?, ?, ?::jsonb, ?::timestamptz)
+                        ''',
+                        (
+                            frame_id,
+                            store_id,
+                            user_id,
+                            frame_payload['image_url'],
+                            json.dumps(metadata_payload),
+                            agora,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        '''
+                        INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ''',
+                        (
+                            frame_id,
+                            store_id,
+                            user_id,
+                            frame_payload['image_url'],
+                            json.dumps(metadata_payload),
+                            agora,
+                        ),
+                    )
+        except Exception as db_exc:
+            persisted = False
+            print(f"⚠️ Falha ao persistir frame no banco (store={store_id}): {db_exc}")
 
-        return jsonify({
+        # Mantem ultimo frame em memoria para fallback do polling.
+        camera_latest_frames[int(store_id)] = frame_payload
+
+        # Notifica clientes em tempo real sem quebrar upload caso o emit falhe.
+        try:
+            socketio.emit('new_frame', frame_payload, room=str(store_id))
+        except Exception as emit_exc:
+            print(f"⚠️ Falha ao emitir socket event (store={store_id}): {emit_exc}")
+
+        response = {
             'ok': True,
             'frame_id': frame_id,
             'width': img.width,
             'height': img.height,
             'message': 'Imagem enviada com sucesso.',
-        })
+            'persisted': persisted,
+        }
+        if not persisted:
+            response['warning'] = 'Imagem sincronizada em tempo real, mas o historico local falhou no servidor.'
+        return jsonify(response)
 
     except Exception as e:
         return jsonify({'error': 'Falha ao processar a imagem.', 'details': str(e)}), 500
@@ -2022,33 +2039,43 @@ def camera_presence_status():
 def latest_camera_frame():
     store_id = current_store_id()
     after_id = str(request.args.get('after_id') or '').strip()
+    row = None
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                '''
+                SELECT id, image_b64, metadata, created_at
+                FROM frames_cache
+                WHERE store_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                ''',
+                (store_id,)
+            ).fetchone()
+    except Exception as db_exc:
+        print(f"⚠️ Falha ao consultar frames_cache (store={store_id}): {db_exc}")
 
-    with get_db() as conn:
-        row = conn.execute(
-            '''
-            SELECT id, image_b64, metadata, created_at
-            FROM frames_cache
-            WHERE store_id = ?
-            ORDER BY created_at DESC
-            LIMIT 1
-            ''',
-            (store_id,)
-        ).fetchone()
+    if row:
+        if after_id and row['id'] == after_id:
+            return jsonify({'ok': True, 'frame': None})
 
-    if not row or (after_id and row['id'] == after_id):
+        metadata = decode_json_field(row['metadata'], {}) if row['metadata'] is not None else {}
+        return jsonify({
+            'ok': True,
+            'frame': {
+                'frame_id': row['id'],
+                'image_url': row['image_b64'],
+                'timestamp': row['created_at'],
+                'width': int(metadata.get('width') or 0),
+                'height': int(metadata.get('height') or 0),
+            }
+        })
+
+    fallback = camera_latest_frames.get(int(store_id)) if store_id is not None else None
+    if not fallback or (after_id and fallback.get('frame_id') == after_id):
         return jsonify({'ok': True, 'frame': None})
 
-    metadata = decode_json_field(row['metadata'], {}) if row['metadata'] is not None else {}
-    return jsonify({
-        'ok': True,
-        'frame': {
-            'frame_id': row['id'],
-            'image_url': row['image_b64'],
-            'timestamp': row['created_at'],
-            'width': int(metadata.get('width') or 0),
-            'height': int(metadata.get('height') or 0),
-        }
-    })
+    return jsonify({'ok': True, 'frame': fallback})
 
 # ── Sugestao de nome pela imagem (Gemini Vision) ─────────
 @app.route('/api/describe-image', methods=['POST'])
