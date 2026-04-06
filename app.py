@@ -3,6 +3,8 @@
 #  Login protegido server-side com Flask session
 #  + Proxy para API do Gemini (Google AI Studio - gratuito)
 # ═══════════════════════════════════════════════════════════
+import eventlet
+eventlet.monkey_patch()
 
 """
 MAPA FUNCIONAL DO BACKEND (RESUMO PARA IA)
