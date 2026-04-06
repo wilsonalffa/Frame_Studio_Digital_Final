@@ -1,4 +1,4 @@
-# ═══════════════════════════════════════════════════════════
+﻿# ═══════════════════════════════════════════════════════════
 #  Frame Studio Digital — app.py
 #  Login protegido server-side com Flask session
 #  + Proxy para API do Gemini (Google AI Studio - gratuito)
@@ -1042,7 +1042,6 @@ def handle_disconnect():
 
 
 # ── Upload de imagem via mobile (envia para desktop em tempo real) ──
-
 @app.route('/api/upload-image', methods=['POST'])
 @login_required
 def upload_frame():
@@ -1137,8 +1136,12 @@ def upload_frame():
         # Mantem ultimo frame em memoria para fallback do polling.
         camera_latest_frames[int(store_id)] = frame_payload
 
-        # Notifica todos os clientes da mesma loja em tempo real
-        socketio.emit('new_frame', frame_payload, room=str(store_id))
+        # Notifica clientes em tempo real; protegido para nao quebrar a resposta HTTP
+        # caso o worker nao suporte WebSocket (ex: gthread sem eventlet).
+        try:
+            socketio.emit('new_frame', frame_payload, room=str(store_id))
+        except Exception as emit_exc:
+            print(f"⚠️ Falha ao emitir socket event (store={store_id}): {emit_exc}")
 
         response = {
             'ok': True,
