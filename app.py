@@ -3,8 +3,6 @@
 #  Login protegido server-side com Flask session
 #  + Proxy para API do Gemini (Google AI Studio - gratuito)
 # ═══════════════════════════════════════════════════════════
-import eventlet
-eventlet.monkey_patch()
 
 """
 MAPA FUNCIONAL DO BACKEND (RESUMO PARA IA)
@@ -64,7 +62,7 @@ load_dotenv()  # Carrega variaveis do arquivo .env local
 
 # Inicializacao do Flask e SocketIO
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 active_sessions = {}  # {store_id: {'desktop': set(sids), 'mobile': set(sids), 'unknown': set(sids)}}
 socket_clients = {}  # {sid: {'store_id': int, 'user_id': int, 'device_type': str}}
