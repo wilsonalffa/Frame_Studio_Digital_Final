@@ -68,6 +68,8 @@
       max-height: 320px;
       object-fit: contain;
       display: block;
+      transform-origin: center center;
+      transition: transform .18s ease;
     }
 
     .csm-meta {
@@ -79,6 +81,33 @@
 
     .csm-body {
       padding: 18px 20px 22px;
+    }
+
+    .csm-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .csm-rotate-btn {
+      background: #E7EEF8;
+      color: #1F3F69;
+      border: 1px solid #AFC2DB;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: 'Raleway', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .csm-rotate-btn:hover { background: #DDE8F6; }
+    .csm-rotate-state {
+      margin-left: auto;
+      font-size: 11px;
+      color: #5B6574;
+      font-family: 'Raleway', sans-serif;
+      font-weight: 700;
     }
 
     .csm-save-btn {
@@ -296,6 +325,7 @@ class CameraSync {
     this.lastFrameId = '';
     this.initialPollDone = false;
     this.pageStartedAt = Date.now();
+    this.currentRotation = 0;
   }
 
   // ── WebSocket ──────────────────────────────────────────
@@ -376,9 +406,13 @@ class CameraSync {
   // ── Recebe nova foto ───────────────────────────────────
   handleNewFrame(data) {
     console.log('📸 Nova imagem recebida:', data);
-    this.incomingFrames.push(data);
+    const frame = {
+      ...data,
+      rotation: Number(data && data.rotation) || 0,
+    };
+    this.incomingFrames.push(frame);
     this._ensureModal();
-    this.openModal(data);
+    this.openModal(frame);
   }
 
   // ── Garante que o modal está no DOM ───────────────────
@@ -399,6 +433,11 @@ class CameraSync {
         </div>
         <div class="csm-meta" id="csmMeta"></div>
         <div class="csm-body">
+          <div class="csm-tools">
+            <button class="csm-rotate-btn" onclick="cameraSync.rotateCurrentFrame(-90)">↺ Girar -90°</button>
+            <button class="csm-rotate-btn" onclick="cameraSync.rotateCurrentFrame(90)">↻ Girar +90°</button>
+            <span class="csm-rotate-state" id="csmRotationLabel">Rotação: 0°</span>
+          </div>
           <button class="csm-save-btn" onclick="cameraSync.saveToCatalog()">
             📁 Salvar no Catálogo — pasta Câmera
           </button>
@@ -537,11 +576,71 @@ class CameraSync {
     const img   = document.getElementById('csmPreviewImg');
     const meta  = document.getElementById('csmMeta');
 
+    this.currentRotation = Number(data && data.rotation) || 0;
     img.src = data.image_url;
+    this._applyPreviewRotation();
     meta.textContent = `${data.width} × ${data.height}px  ·  Enviada às ${data.timestamp ? data.timestamp.slice(11,16) : '--:--'}`;
+    this._updateRotationLabel();
 
     modal.classList.add('active');
     document.getElementById('syncBadge').classList.remove('visible');
+  }
+
+  _normalizeRotation(deg) {
+    return ((Number(deg) % 360) + 360) % 360;
+  }
+
+  _applyPreviewRotation() {
+    const img = document.getElementById('csmPreviewImg');
+    if (!img) return;
+    img.style.transform = `rotate(${this._normalizeRotation(this.currentRotation)}deg)`;
+  }
+
+  _updateRotationLabel() {
+    const label = document.getElementById('csmRotationLabel');
+    if (!label) return;
+    label.textContent = `Rotação: ${this._normalizeRotation(this.currentRotation)}°`;
+  }
+
+  rotateCurrentFrame(delta) {
+    const frame = this.incomingFrames[this.incomingFrames.length - 1];
+    if (!frame) return;
+    frame.rotation = this._normalizeRotation((frame.rotation || 0) + delta);
+    this.currentRotation = frame.rotation;
+    this._applyPreviewRotation();
+    this._updateRotationLabel();
+  }
+
+  _rotateDataUrl(src, rotation) {
+    return new Promise((resolve, reject) => {
+      const normalized = this._normalizeRotation(rotation);
+      if (!normalized) {
+        resolve(src);
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas indisponivel para rotacao'));
+          return;
+        }
+
+        const swap = normalized === 90 || normalized === 270;
+        canvas.width = swap ? img.height : img.width;
+        canvas.height = swap ? img.width : img.height;
+
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((normalized * Math.PI) / 180);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+        resolve(canvas.toDataURL('image/jpeg', 0.9));
+      };
+      img.onerror = () => reject(new Error('Falha ao carregar imagem para rotacao'));
+      img.src = src;
+    });
   }
 
   closeModal() {
@@ -573,7 +672,7 @@ class CameraSync {
   }
 
   // ── Salva a foto no catálogo (pasta Câmera) ───────────
-  saveToCatalog() {
+  async saveToCatalog() {
     const frame = this.incomingFrames[this.incomingFrames.length - 1];
     if (!frame) return;
 
@@ -581,6 +680,7 @@ class CameraSync {
       const folderId = this._ensureCameraFolder();
       const now = new Date();
       const label = `Câmera ${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+      const savedSrc = await this._rotateDataUrl(frame.image_url, frame.rotation || 0);
 
       _ffCatalogData.items.push({
         id:         _ffCatalogId('item'),
@@ -589,7 +689,7 @@ class CameraSync {
         title:      label,
         tags:       'camera, mobile',
         sourceName: `frame_${frame.frame_id}.jpg`,
-        src:        frame.image_url,
+        src:        savedSrc,
         createdAt:  now.toISOString(),
       });
 
