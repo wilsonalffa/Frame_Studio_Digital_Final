@@ -1292,6 +1292,9 @@ def criar_loja():
         )
         store_id = inserted_id(conn, cur_store)
 
+        # Garante que toda nova unidade comece com catalogo vazio persistido.
+        save_store_state(conn, store_id, 'catalog', default_store_state('catalog'))
+
         cur = conn.execute(
             '''
             INSERT INTO users (store_id, username, display_name, password_hash, role, is_active, created_at, updated_at)
@@ -1436,6 +1439,51 @@ def desativar_loja(store_id):
             'UPDATE users SET is_active = ?, updated_at = ? WHERE store_id = ?',
             (False, now_iso(), store_id)
         )
+
+    return jsonify({'ok': True, 'store_id': store_id})
+
+
+@app.route('/api/stores/<int:store_id>/purge', methods=['DELETE'])
+@login_required
+@admin_required
+def excluir_loja_definitivo(store_id):
+    session_user_id = session.get('user_id')
+    with get_db() as conn:
+        row = conn.execute(
+            '''
+            SELECT s.*, u.id AS access_user_id, u.role AS access_role, u.is_active AS access_is_active
+            FROM stores s
+            LEFT JOIN users u ON u.id = (
+                SELECT ux.id FROM users ux WHERE ux.store_id = s.id ORDER BY ux.id LIMIT 1
+            )
+            WHERE s.id = ?
+            ''',
+            (store_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'Unidade nao encontrada.'}), 404
+        if row['access_user_id'] == session_user_id:
+            return jsonify({'error': 'Voce nao pode excluir a propria unidade logada.'}), 400
+        if row['access_role'] == 'admin' and bool(row['access_is_active']) and count_active_admins(conn) <= 1:
+            return jsonify({'error': 'O sistema precisa manter pelo menos um administrador ativo.'}), 400
+
+        conn.execute('DELETE FROM consultas WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM clientes WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM store_state WHERE store_id = ?', (store_id,))
+        try:
+            conn.execute('DELETE FROM frames_cache WHERE store_id = ?', (store_id,))
+        except Exception:
+            pass
+        conn.execute('DELETE FROM users WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM stores WHERE id = ?', (store_id,))
+
+    # Limpeza de caches em memoria para a unidade removida.
+    try:
+        active_sessions.pop(int(store_id), None)
+        camera_heartbeats.pop(int(store_id), None)
+        camera_latest_frames.pop(int(store_id), None)
+    except Exception:
+        pass
 
     return jsonify({'ok': True, 'store_id': store_id})
 

@@ -135,6 +135,9 @@ function switchTab(id,btn){
     const box=document.getElementById('sqUploadBox');
     if(box&&box.style.display!=='none'){ sqImg=qImg; showSQ(); toast('Usando a imagem carregada em Imagem & Qualidade.'); }
   }
+  if(id==='simquadro'&&typeof ffAplicarComposicaoDivisaoNoQuadro==='function'&&_ffSplitComposicaoDataUrl){
+    ffAplicarComposicaoDivisaoNoQuadro(false);
+  }
   // Auto-popular divisão a partir da imagem carregada
   if(id==='canvas'&&!cImg&&typeof qImg!=='undefined'&&qImg){
     const results=document.getElementById('cResults');
@@ -144,6 +147,13 @@ function switchTab(id,btn){
       if(box) box.style.display='none';
       showC();
       toast('Usando a imagem carregada em Imagem & Qualidade.');
+    }
+  }
+  if(id==='simulador'&&typeof ffAplicarComposicaoDivisaoNoAmbiente==='function'&&_ffSplitComposicaoDataUrl){
+    if(_ffSkipNextSplitAutoApplyAmbiente){
+      _ffSkipNextSplitAutoApplyAmbiente=false;
+    } else {
+      ffAplicarComposicaoDivisaoNoAmbiente(false);
     }
   }
   if(id==='clientes' && typeof carregarClientes==='function'){
@@ -604,6 +614,99 @@ function renderSplit(){
     }
   }
   buildDlRow();
+  ffAtualizarComposicaoDivisaoSincronizada();
+}
+
+function ffAtualizarComposicaoDivisaoSincronizada(){
+  if(!cImg) return;
+  const cvs=document.getElementById('splitCanvas');
+  if(!cvs || cvs.width<2 || cvs.height<2) return;
+
+  _ffSplitComposicaoDataUrl=cvs.toDataURL('image/jpeg',0.9);
+  const fallbackDims=_ffCatalogDims50x70ForImage(cImg.img);
+  const wBase=parseFloat(totalWcm)||fallbackDims.w;
+  const hBase=parseFloat(totalHcm)||fallbackDims.h;
+  _ffSplitComposicaoDims={ w:wBase, h:hBase };
+  const nAtual=splitOrient==='grid'?(gridCols*gridRows):partWidths.length;
+  _ffSplitComposicaoMeta={
+    orient:splitOrient,
+    n:nAtual,
+    gridCols:splitOrient==='grid'?gridCols:1,
+    gridRows:splitOrient==='grid'?gridRows:1,
+    partWidths:[...partWidths],
+    partHeights:[...partHeights],
+    totalW:wBase,
+    totalH:hBase,
+    gapCm:1.2,
+  };
+  _ffSplitComposicaoStamp=Date.now();
+
+  if(document.getElementById('tab-simquadro')?.classList.contains('active')){
+    ffAplicarComposicaoDivisaoNoQuadro(false);
+  }
+  if(document.getElementById('tab-simulador')?.classList.contains('active')){
+    ffAplicarComposicaoDivisaoNoAmbiente(false);
+  }
+}
+
+function ffAplicarComposicaoDivisaoNoQuadro(showMsg=true){
+  if(!_ffSplitComposicaoDataUrl) return;
+  _aplicarImagemQuadroBase64(_ffSplitComposicaoDataUrl, ()=>{
+    _ffSplitComposicaoAtiva=Boolean(_ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1);
+    const sqWEl=document.getElementById('sqW');
+    const sqHEl=document.getElementById('sqH');
+    if(sqWEl) sqWEl.value=_ffSplitComposicaoDims.w;
+    if(sqHEl) sqHEl.value=_ffSplitComposicaoDims.h;
+    if(typeof renderFrame==='function') renderFrame();
+    if(showMsg) toast('Composição de Divisão aplicada no Simulador de Quadros.');
+  });
+}
+
+function ffAplicarComposicaoDivisaoNoAmbiente(showMsg=true){
+  if(!_ffSplitComposicaoDataUrl) return;
+  const jaAplicadaNoStamp=window._ffSplitComposicaoStampAplicadaAmbiente===_ffSplitComposicaoStamp;
+  if(Array.isArray(wallFrames)&&wallFrames.length&&jaAplicadaNoStamp) return;
+
+  const meta=_ffSplitComposicaoMeta;
+  const srcImg=(cImg&&cImg.img)?cImg.img:null;
+  const temMultiPainel=Boolean(meta && (meta.n||0)>1 && srcImg);
+  if(temMultiPainel){
+    _ffSplitCreatePanelImages(meta,srcImg)
+      .then((layoutData)=>{
+        const ok=_ffSplitApplyPanelsToWall(layoutData);
+        if(!ok) throw new Error('Não foi possível montar os quadros da composição.');
+        window._ffSplitComposicaoStampAplicadaAmbiente=_ffSplitComposicaoStamp;
+        if(showMsg) toast('Composição aplicada no ambiente como múltiplos quadros.');
+      })
+      .catch(()=>{
+        if(showMsg) toast('Falha ao aplicar composição em múltiplos quadros no ambiente.');
+      });
+    return;
+  }
+
+  _ffSplitWallLayoutState=null;
+  _ffSplitSetWallGapUI(false,1.2);
+
+  const img=new Image();
+  img.onload=()=>{
+    if(Array.isArray(wallFrames)&&wallFrames.length){
+      if(wallSelectedIdx<0) wallSelectedIdx=0;
+      const idx=wallSelectedIdx>=0?wallSelectedIdx:0;
+      if(wallFrames[idx]){
+        wallFrames[idx].img=img;
+        _ffCatalogFitSelectedWallFrame(img,_ffSplitComposicaoDims);
+      }
+    } else {
+      wallAddFrame(img);
+      _ffCatalogFitSelectedWallFrame(img,_ffSplitComposicaoDims);
+    }
+    wArtImg=img;
+    window._ffSplitComposicaoStampAplicadaAmbiente=_ffSplitComposicaoStamp;
+    if(typeof checkWall==='function') checkWall();
+    if(typeof renderWall==='function') renderWall();
+    if(showMsg) toast('Composição de Divisão aplicada no Simulador de Ambiente.');
+  };
+  img.src=_ffSplitComposicaoDataUrl;
 }
 
 function buildDlRow(){
@@ -1854,6 +1957,9 @@ let sqImg=null;
 let sqFrameColor='#3C2F1E';
 let sqPpColor='#FFFFFF';
 let sqBgColor='#E8EDF2';
+let _ffSplitComposicaoAtiva=false;
+let _ffSplitComposicaoMeta=null;
+let _ffSplitReplayImg=null;
 
 function loadSQ(e){ loadImgFile(e.target.files[0],'sq'); }
 
@@ -1861,7 +1967,13 @@ function loadSQ(e){ loadImgFile(e.target.files[0],'sq'); }
 function _dispatchImg(d, type){
   if(type==='q'){  qImg=d; showQ(); }
   else if(type==='c'){ cImg=d; showC(); }
-  else if(type==='sq'){ sqImg=d; showSQ(); }
+  else if(type==='sq'){
+    _ffSplitComposicaoAtiva=false;
+    _ffSplitComposicaoMeta=null;
+    _ffSplitReplayImg=null;
+    sqImg=d;
+    showSQ();
+  }
 }
 
 function showSQ(){
@@ -1876,9 +1988,372 @@ function showSQ(){
 
 function resetSQ(){
   sqImg=null;
+  _ffSplitComposicaoAtiva=false;
+  _ffSplitComposicaoMeta=null;
+  _ffSplitReplayImg=null;
   document.getElementById('sqUploadBox').style.display='block';
   document.getElementById('sqResults').style.display='none';
   document.getElementById('sqFile').value='';
+}
+
+function _ffSplitLayout(meta){
+  if(!meta) return { cols:1, rows:1 };
+  if(meta.orient==='grid'){
+    return {
+      cols:Math.max(1,parseInt(meta.gridCols)||1),
+      rows:Math.max(1,parseInt(meta.gridRows)||1)
+    };
+  }
+  if(meta.orient==='v') return { cols:1, rows:Math.max(1,parseInt(meta.n)||1) };
+  return { cols:Math.max(1,parseInt(meta.n)||1), rows:1 };
+}
+
+function _ffSplitColsCm(meta){
+  const { cols }=_ffSplitLayout(meta);
+  const totalW=parseFloat(meta?.totalW)||50;
+  if(meta?.orient==='h'){
+    const arr=(meta.partWidths||[]).slice(0,cols).map(v=>parseFloat(v)||0);
+    if(arr.length===cols && arr.every(v=>v>0)) return arr;
+  }
+  if(meta?.orient==='grid'){
+    const arr=[];
+    for(let c=0;c<cols;c++){
+      const v=parseFloat((meta.partWidths||[])[c]);
+      arr.push(v>0?v:totalW/cols);
+    }
+    return arr;
+  }
+  return [Math.max(1,totalW)];
+}
+
+function _ffSplitRowsCm(meta){
+  const { rows }=_ffSplitLayout(meta);
+  const totalH=parseFloat(meta?.totalH)||70;
+  if(meta?.orient==='v'){
+    const arr=(meta.partHeights||[]).slice(0,rows).map(v=>parseFloat(v)||0);
+    if(arr.length===rows && arr.every(v=>v>0)) return arr;
+  }
+  if(meta?.orient==='grid'){
+    const arr=[];
+    for(let r=0;r<rows;r++){
+      const idx=r*(Math.max(1,parseInt(meta.gridCols)||1));
+      const v=parseFloat((meta.partHeights||[])[idx]);
+      arr.push(v>0?v:totalH/rows);
+    }
+    return arr;
+  }
+  return [Math.max(1,totalH)];
+}
+
+function _ffSplitSrcBoundsFromMeta(meta, idx, imgW, imgH){
+  if(!meta) return { srcX:0, srcY:0, srcW:imgW, srcH:imgH };
+  if(meta.orient==='grid'){
+    const cols=Math.max(1,parseInt(meta.gridCols)||1);
+    const rows=Math.max(1,parseInt(meta.gridRows)||1);
+    const r=Math.floor(idx/cols);
+    const c=idx%cols;
+    const srcX=Math.round(c*imgW/cols);
+    const srcY=Math.round(r*imgH/rows);
+    const srcW=Math.round(imgW/cols);
+    const srcH=Math.round(imgH/rows);
+    return { srcX, srcY, srcW, srcH };
+  }
+  if(meta.orient==='h'){
+    const widths=(meta.partWidths||[]).map(v=>parseFloat(v)||0);
+    const totalW=widths.reduce((a,b)=>a+b,0)||1;
+    const prevW=widths.slice(0,idx).reduce((a,b)=>a+b,0);
+    const currW=widths[idx]||0;
+    const start=Math.round((prevW/totalW)*imgW);
+    const end=idx===widths.length-1?imgW:Math.round(((prevW+currW)/totalW)*imgW);
+    return { srcX:start, srcY:0, srcW:Math.max(1,end-start), srcH:imgH };
+  }
+  const heights=(meta.partHeights||[]).map(v=>parseFloat(v)||0);
+  const totalH=heights.reduce((a,b)=>a+b,0)||1;
+  const prevH=heights.slice(0,idx).reduce((a,b)=>a+b,0);
+  const currH=heights[idx]||0;
+  const start=Math.round((prevH/totalH)*imgH);
+  const end=idx===heights.length-1?imgH:Math.round(((prevH+currH)/totalH)*imgH);
+  return { srcX:0, srcY:start, srcW:imgW, srcH:Math.max(1,end-start) };
+}
+
+function _ffSplitBuildPanelSpecs(meta){
+  const { cols, rows }=_ffSplitLayout(meta);
+  const colsCm=_ffSplitColsCm(meta);
+  const rowsCm=_ffSplitRowsCm(meta);
+  const specs=[];
+  let idx=0;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      if(idx>=(meta.n||1)) break;
+      specs.push({ idx, col:c, row:r, wCm:Math.max(1,colsCm[c]||10), hCm:Math.max(1,rowsCm[r]||10) });
+      idx++;
+    }
+  }
+  return { cols, rows, specs };
+}
+
+function _ffSplitCreatePanelImage(srcImg, meta, spec){
+  return new Promise((resolve,reject)=>{
+    try{
+      const imgW=srcImg.naturalWidth||srcImg.width;
+      const imgH=srcImg.naturalHeight||srcImg.height;
+      const src=_ffSplitSrcBoundsFromMeta(meta,spec.idx,imgW,imgH);
+      const cv=document.createElement('canvas');
+      cv.width=Math.max(1,src.srcW);
+      cv.height=Math.max(1,src.srcH);
+      const cctx=cv.getContext('2d');
+      cctx.drawImage(srcImg,src.srcX,src.srcY,src.srcW,src.srcH,0,0,cv.width,cv.height);
+      const panelImg=new Image();
+      panelImg.onload=()=>resolve({ img:panelImg, spec });
+      panelImg.onerror=()=>reject(new Error('Falha ao criar painel da composição.'));
+      panelImg.src=cv.toDataURL('image/jpeg',0.92);
+    }catch(err){
+      reject(err);
+    }
+  });
+}
+
+async function _ffSplitCreatePanelImages(meta, srcImg){
+  const layout=_ffSplitBuildPanelSpecs(meta);
+  const tasks=layout.specs.map(spec=>_ffSplitCreatePanelImage(srcImg,meta,spec));
+  const items=await Promise.all(tasks);
+  return { ...layout, items };
+}
+
+function _ffSplitSetWallGapUI(active, gapCm=1.2){
+  const wrap=document.getElementById('wCompGapWrap');
+  const inp=document.getElementById('wCompGap');
+  const lbl=document.getElementById('wCompGapL');
+  if(wrap) wrap.style.display=active?'block':'none';
+  if(inp){
+    inp.value=String(gapCm);
+    inp.disabled=!active;
+  }
+  if(lbl) lbl.textContent=(Number(gapCm).toFixed(1))+'cm';
+}
+
+function _ffSplitGetWallFrameOuterDimsCm(frame){
+  if(!frame) return { outerW:10, outerH:10 };
+  const ppCm=frame.ppOn ? (parseFloat(frame.ppSize)||0) : 0;
+  const frameW=parseFloat(frame.frameW)||0;
+  return {
+    outerW:(parseFloat(frame.wCm)||10) + 2*(ppCm + frameW),
+    outerH:(parseFloat(frame.hCm)||10) + 2*(ppCm + frameW),
+  };
+}
+
+function ffSplitSetWallGap(value){
+  const gap=Math.max(0,Math.min(10,parseFloat(value)||0));
+  if(!_ffSplitWallLayoutState || !Array.isArray(wallFrames) || !wallFrames.length) return;
+  _ffSplitWallLayoutState.gapCm=gap;
+
+  const specs=_ffSplitWallLayoutState.specs||[];
+  const cols=_ffSplitWallLayoutState.cols||1;
+  const rows=_ffSplitWallLayoutState.rows||1;
+  const frameMap=new Map();
+  for(const f of wallFrames){
+    if(f && f._ffCompPanel===true) frameMap.set(f._ffCompIdx,f);
+  }
+  if(!frameMap.size) return;
+
+  const rowLayouts=[];
+  let totalHcm=0;
+  let maxRowWcm=0;
+  for(let r=0;r<rows;r++){
+    const rowSpecs=specs.filter(s=>s.row===r).sort((a,b)=>a.col-b.col);
+    const rowFrames=rowSpecs.map(s=>({ spec:s, frame:frameMap.get(s.idx) })).filter(x=>x.frame);
+    const rowWidths=rowFrames.map(x=>_ffSplitGetWallFrameOuterDimsCm(x.frame).outerW);
+    const rowHeights=rowFrames.map(x=>_ffSplitGetWallFrameOuterDimsCm(x.frame).outerH);
+    const rowWcm=rowWidths.reduce((a,b)=>a+b,0)+Math.max(0,rowFrames.length-1)*gap;
+    const rowHcm=rowHeights.length?Math.max(...rowHeights):10;
+    rowLayouts.push({ rowFrames, rowWcm, rowHcm });
+    maxRowWcm=Math.max(maxRowWcm,rowWcm);
+    totalHcm+=rowHcm;
+  }
+  totalHcm += Math.max(0,rows-1)*gap;
+  const safeBaseCenterX=Math.max(2,Math.min(98,Number(_ffSplitWallLayoutState.baseCenterX)||50));
+  const safeBaseCenterY=Math.max(2,Math.min(98,Number(_ffSplitWallLayoutState.baseCenterY)||38));
+  const wallHcm=wEnvImg ? (300 * ((wEnvImg.naturalHeight||1)/(wEnvImg.naturalWidth||1))) : 170;
+  const leftCm=-maxRowWcm/2;
+  const topCm=-totalHcm/2;
+
+  let runningY=0;
+  for(let r=0;r<rowLayouts.length;r++){
+    const row=rowLayouts[r];
+    let runningX=(maxRowWcm - row.rowWcm)/2;
+    for(const item of row.rowFrames){
+      const f=item.frame;
+      const dims=_ffSplitGetWallFrameOuterDimsCm(f);
+      const centerXcm=leftCm + runningX + (dims.outerW/2);
+      const centerYcm=topCm + runningY + (row.rowHcm/2);
+      f.xP=Math.max(2,Math.min(98,safeBaseCenterX + (centerXcm/300)*100));
+      f.yP=Math.max(2,Math.min(98,safeBaseCenterY + (centerYcm/wallHcm)*100));
+      runningX+=dims.outerW+gap;
+    }
+    runningY+=row.rowHcm+gap;
+  }
+
+  const lbl=document.getElementById('wCompGapL');
+  if(lbl) lbl.textContent=gap.toFixed(1)+'cm';
+  if(typeof _wallUpdatePanelFromSelected==='function') _wallUpdatePanelFromSelected();
+  if(typeof _wallRenderPanel==='function') _wallRenderPanel();
+  if(typeof renderWall==='function') renderWall();
+}
+
+function ffSplitScaleWallCompositionFromFrame(frame, options={}){
+  if(!_ffSplitWallLayoutState || !frame || frame._ffCompPanel !== true) return false;
+  const specs=_ffSplitWallLayoutState.specs||[];
+  const targetSpec=specs.find(s=>s.idx===frame._ffCompIdx);
+  if(!targetSpec) return false;
+
+  const srcW=Math.max(0.1, parseFloat(targetSpec.wCm)||0.1);
+  const srcH=Math.max(0.1, parseFloat(targetSpec.hCm)||0.1);
+  const nextW=Math.max(1, parseFloat(frame.wCm)||srcW);
+  const nextH=Math.max(1, parseFloat(frame.hCm)||srcH);
+  const scaleW=nextW/srcW;
+  const scaleH=nextH/srcH;
+  const prefer=options.prefer || 'auto';
+
+  let scale=1;
+  if(prefer==='width') scale=scaleW;
+  else if(prefer==='height') scale=scaleH;
+  else {
+    const dw=Math.abs(scaleW-1);
+    const dh=Math.abs(scaleH-1);
+    scale=dw>=dh?scaleW:scaleH;
+  }
+  scale=Math.max(0.1, scale);
+
+  _ffSplitWallLayoutState.specs=_ffSplitWallLayoutState.specs.map((spec)=>({
+    ...spec,
+    wCm:Math.max(1, Math.round((spec.wCm*scale)*10)/10),
+    hCm:Math.max(1, Math.round((spec.hCm*scale)*10)/10),
+  }));
+
+  ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+  return true;
+}
+
+function _ffSplitApplyPanelsToWall(layoutData){
+  const items=layoutData?.items||[];
+  if(!items.length) return false;
+
+  const cols=layoutData.cols||1;
+  const rows=layoutData.rows||1;
+  const gapCm=parseFloat(_ffSplitComposicaoMeta?.gapCm)||1.2;
+  const wallHcm=wEnvImg ? (300 * ((wEnvImg.naturalHeight||1)/(wEnvImg.naturalWidth||1))) : 170;
+  const totalWcm=(layoutData.specs||[]).reduce((acc,s)=>acc + (s.row===0?s.wCm:0),0) + Math.max(0,cols-1)*gapCm;
+
+  const rowHeights=[];
+  for(let r=0;r<rows;r++){
+    const rowItem=(layoutData.specs||[]).find(s=>s.row===r);
+    rowHeights.push(rowItem ? rowItem.hCm : 10);
+  }
+  const totalHcm=rowHeights.reduce((a,b)=>a+b,0)+Math.max(0,rows-1)*gapCm;
+
+  const styleFrameW=parseFloat(document.getElementById('wFrameW')?.value||3)||3;
+  const stylePPOn=Boolean(document.getElementById('ppEnabled')?.checked);
+  const stylePPSize=parseFloat(document.getElementById('ppSize')?.value||3)||3;
+  const styleShadow=parseInt(document.getElementById('wS')?.value||2);
+
+  const baseCenterX=50;
+  const baseCenterY=38;
+  const leftCm=-totalWcm/2;
+  const topCm=-totalHcm/2;
+
+  let runningY=0;
+  const frames=[];
+  for(let r=0;r<rows;r++){
+    let runningX=0;
+    const rowItems=items.filter(it=>it.spec.row===r).sort((a,b)=>a.spec.col-b.spec.col);
+    for(const it of rowItems){
+      const f=(typeof _wallDefaultFrame==='function')?_wallDefaultFrame(it.img):{ img:it.img, frameColor:wallFrameColor||'#3C2F1E', frameW:3, ppOn:false, ppColor:'#FFFFFF', ppSize:3, shadow:2, id:Date.now()+Math.random() };
+      f.img=it.img;
+      f.wCm=Math.max(1,it.spec.wCm);
+      f.hCm=Math.max(1,it.spec.hCm);
+      f.frameColor=wallFrameColor||f.frameColor;
+      f.frameW=styleFrameW;
+      f.ppOn=stylePPOn;
+      f.ppColor=ppColor||f.ppColor;
+      f.ppSize=stylePPSize;
+      f.shadow=Number.isFinite(styleShadow)?styleShadow:2;
+      f._ffCompPanel=true;
+      f._ffCompIdx=it.spec.idx;
+      f._ffCompRow=it.spec.row;
+      f._ffCompCol=it.spec.col;
+
+      const centerXcm=leftCm + runningX + (it.spec.wCm/2);
+      const centerYcm=topCm + runningY + (it.spec.hCm/2);
+      f.xP=Math.max(2,Math.min(98,baseCenterX + (centerXcm/300)*100));
+      f.yP=Math.max(2,Math.min(98,baseCenterY + (centerYcm/wallHcm)*100));
+      frames.push(f);
+      runningX += it.spec.wCm + gapCm;
+    }
+    runningY += (rowHeights[r]||10) + gapCm;
+  }
+
+  if(!frames.length) return false;
+  _ffSplitWallLayoutState={
+    cols,
+    rows,
+    specs:(layoutData.specs||[]).map(s=>({ ...s })),
+    baseCenterX,
+    baseCenterY,
+    gapCm,
+  };
+  _ffSplitSetWallGapUI(true,gapCm);
+  wallFrames=frames;
+  wallSelectedIdx=0;
+  wArtImg=frames[0].img;
+  ffSplitSetWallGap(gapCm);
+  if(typeof checkWall==='function') checkWall();
+  if(typeof _wallRenderPanel==='function') _wallRenderPanel();
+  if(typeof _wallUpdatePanelFromSelected==='function') _wallUpdatePanelFromSelected();
+  if(typeof renderWall==='function') renderWall();
+  return true;
+}
+
+function _ffDrawQuadroUnit(ctx, img, src, x, y, imgWpx, imgHpx, frameWpx, ppPx, ppOn){
+  const outerW=imgWpx+2*(frameWpx+ppPx);
+  const outerH=imgHpx+2*(frameWpx+ppPx);
+
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.35)';
+  ctx.shadowBlur=20;
+  ctx.shadowOffsetX=4;
+  ctx.shadowOffsetY=6;
+  ctx.fillStyle=sqFrameColor||'transparent';
+  ctx.fillRect(x,y,outerW,outerH);
+  ctx.restore();
+
+  if(frameWpx>0){
+    ctx.fillStyle=sqFrameColor;
+    ctx.fillRect(x,y,outerW,outerH);
+    const bevel=Math.max(2,frameWpx*0.12);
+    ctx.fillStyle='rgba(255,255,255,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(x,y); ctx.lineTo(x+outerW,y); ctx.lineTo(x+outerW-bevel,y+bevel); ctx.lineTo(x+bevel,y+bevel); ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x,y); ctx.lineTo(x+bevel,y+bevel); ctx.lineTo(x+bevel,y+outerH-bevel); ctx.lineTo(x,y+outerH); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(x+outerW,y+outerH); ctx.lineTo(x,y+outerH); ctx.lineTo(x+bevel,y+outerH-bevel); ctx.lineTo(x+outerW-bevel,y+outerH-bevel); ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x+outerW,y+outerH); ctx.lineTo(x+outerW-bevel,y+outerH-bevel); ctx.lineTo(x+outerW-bevel,y+bevel); ctx.lineTo(x+outerW,y); ctx.closePath(); ctx.fill();
+  }
+
+  if(ppOn&&ppPx>0){
+    ctx.fillStyle=sqPpColor;
+    ctx.fillRect(x+frameWpx,y+frameWpx,outerW-frameWpx*2,outerH-frameWpx*2);
+    const ppBevel=Math.max(1,ppPx*0.08);
+    ctx.strokeStyle='rgba(0,0,0,0.1)';
+    ctx.lineWidth=ppBevel;
+    ctx.strokeRect(x+frameWpx+ppPx-ppBevel/2,y+frameWpx+ppPx-ppBevel/2,imgWpx+ppBevel,imgHpx+ppBevel);
+  }
+
+  const imgX=x+frameWpx+ppPx;
+  const imgY=y+frameWpx+ppPx;
+  ctx.drawImage(img,src.srcX,src.srcY,src.srcW,src.srcH,imgX,imgY,imgWpx,imgHpx);
 }
 
 function renderFrame(){
@@ -1892,6 +2367,61 @@ function renderFrame(){
   const frameWcm=parseFloat(document.getElementById('sqFrameW').value)||0;
   const ppOn=document.getElementById('sqPpEnabled').checked;
   const ppCm=ppOn?(parseFloat(document.getElementById('sqPpSize').value)||3):0;
+
+  const splitAtivo=Boolean(_ffSplitComposicaoAtiva && _ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1);
+  if(splitAtivo){
+    const meta=_ffSplitComposicaoMeta;
+    const srcImg=_ffSplitReplayImg || ((cImg&&cImg.img)?cImg.img:sqImg.img);
+    const imgW=srcImg.naturalWidth||srcImg.width;
+    const imgH=srcImg.naturalHeight||srcImg.height;
+    const { cols, rows }=_ffSplitLayout(meta);
+    const colsCm=_ffSplitColsCm(meta);
+    const rowsCm=_ffSplitRowsCm(meta);
+    const gapCm=parseFloat(meta.gapCm)||1.2;
+
+    const colOuterCm=colsCm.map(v=>v+2*(ppCm+frameWcm));
+    const rowOuterCm=rowsCm.map(v=>v+2*(ppCm+frameWcm));
+    const totalWcm=colOuterCm.reduce((a,b)=>a+b,0)+Math.max(0,cols-1)*gapCm;
+    const totalHcm=rowOuterCm.reduce((a,b)=>a+b,0)+Math.max(0,rows-1)*gapCm;
+
+    const scale=Math.min((stageW/Math.max(1,totalWcm)),(520/Math.max(1,totalHcm)));
+    const totalWpx=Math.max(2,Math.round(totalWcm*scale));
+    const totalHpx=Math.max(2,Math.round(totalHcm*scale));
+    const frameWpx=Math.max(0,Math.round(frameWcm*scale));
+    const ppPx=Math.max(0,Math.round(ppCm*scale));
+    const gapPx=Math.max(2,Math.round(gapCm*scale));
+
+    cvs.width=totalWpx; cvs.height=totalHpx;
+    const ctx=cvs.getContext('2d');
+    ctx.fillStyle=sqBgColor; ctx.fillRect(0,0,totalWpx,totalHpx);
+
+    const xOff=[0];
+    for(let c=1;c<cols;c++) xOff[c]=xOff[c-1]+Math.round(colOuterCm[c-1]*scale)+gapPx;
+    const yOff=[0];
+    for(let r=1;r<rows;r++) yOff[r]=yOff[r-1]+Math.round(rowOuterCm[r-1]*scale)+gapPx;
+
+    let idx=0;
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        if(idx>=(meta.n||1)) break;
+        const imgWpx=Math.max(1,Math.round(colsCm[c]*scale));
+        const imgHpx=Math.max(1,Math.round(rowsCm[r]*scale));
+        const src=_ffSplitSrcBoundsFromMeta(meta,idx,imgW,imgH);
+        _ffDrawQuadroUnit(ctx,srcImg,src,xOff[c],yOff[r],imgWpx,imgHpx,frameWpx,ppPx,ppOn);
+        idx++;
+      }
+    }
+
+    const info=document.getElementById('sqSizeInfo');
+    if(info){
+      const parts=[`Composição: ${meta.n} quadros`];
+      if(ppOn&&ppCm>0) parts.push(`Passepartout: ${ppCm}cm`);
+      if(frameWcm>0) parts.push(`Moldura: ${frameWcm}cm`);
+      parts.push(`Total: ${totalWcm.toFixed(1)}×${totalHcm.toFixed(1)}cm`);
+      info.textContent=parts.join('  ·  ');
+    }
+    return;
+  }
 
   // Tamanho total = imagem + passepartout + moldura (2 lados)
   const totalWcm=wCm+(ppCm+frameWcm)*2;
@@ -2033,6 +2563,11 @@ let _ffCatalogPage=1;
 let _ffCatalogViewKey='';
 let _ffCatalogInitPromise=null;
 let _ffCatalogSaveTimer=null;
+let _ffSplitComposicaoDataUrl='';
+let _ffSplitComposicaoDims={ w: 50, h: 70 };
+let _ffSplitComposicaoStamp=0;
+let _ffSplitWallLayoutState=null;
+let _ffSkipNextSplitAutoApplyAmbiente=false;
 let _ffCatalogSaveInFlight=null;
 let _ffCatalogPendingSync=false;
 
@@ -2210,6 +2745,13 @@ function _ffCatalogMigrationFlagKey(){
   return 'ff_store_state_catalog_migrated_'+storeId;
 }
 
+function _ffCatalogCanUseLegacyFallback(){
+  const storeId=window.FF_CURRENT_USER?.store_id;
+  // Em ambiente multiunidade, evitar importar legado local automaticamente
+  // para nao contaminar lojas novas com dados de outro usuario/loja.
+  return !(storeId && String(storeId).trim());
+}
+
 function ffCatalogInit(){
   if(_ffCatalogInitDone) return _ffCatalogInitPromise;
   _ffCatalogInitDone=true;
@@ -2223,19 +2765,25 @@ function ffCatalogInit(){
       if(resp && resp.has_data){
         _ffCatalogData=_ffCatalogNormalizeData(resp.data);
       }else{
-        const legacyData=await _ffCatalogReadLegacyData();
-        _ffCatalogData=legacyData;
-        if(_ffCatalogHasMeaningfulData(legacyData)){
-          _ffCatalogEnforceLimits();
-          _ffCatalogLoaded=true;
-          ffCatalogRender();
-          try{ localStorage.setItem(_ffCatalogMigrationFlagKey(), '1'); }catch(_){ }
-          _ffCatalogSchedulePersist(0);
-          return;
+        if(_ffCatalogCanUseLegacyFallback()){
+          const legacyData=await _ffCatalogReadLegacyData();
+          _ffCatalogData=legacyData;
+          if(_ffCatalogHasMeaningfulData(legacyData)){
+            _ffCatalogEnforceLimits();
+            _ffCatalogLoaded=true;
+            ffCatalogRender();
+            try{ localStorage.setItem(_ffCatalogMigrationFlagKey(), '1'); }catch(_){ }
+            _ffCatalogSchedulePersist(0);
+            return;
+          }
+        }else{
+          _ffCatalogData=_ffCatalogNormalizeData({version:2,folders:[],items:[],sims:[]});
         }
       }
     }catch(_err){
-      _ffCatalogData=await _ffCatalogReadLegacyData();
+      _ffCatalogData=_ffCatalogCanUseLegacyFallback()
+        ? await _ffCatalogReadLegacyData()
+        : _ffCatalogNormalizeData({version:2,folders:[],items:[],sims:[]});
     }
     _ffCatalogLoaded=true;
     ffCatalogRender();
@@ -2522,7 +3070,7 @@ function ffCatalogRender(){
 
   if(!_ffCatalogLoaded){
     grid.innerHTML='<div style="grid-column:1/-1;padding:12px;border:1px dashed var(--border);border-radius:8px;color:var(--gray);font-size:13px">Carregando banco do catálogo...</div>';
-    sims.innerHTML='<div style="padding:12px;border:1px dashed var(--border);border-radius:8px;color:var(--gray);font-size:13px">Carregando simulações salvas...</div>';
+    sims.innerHTML='<div style="padding:12px;border:1px dashed var(--border);border-radius:8px;color:var(--gray);font-size:13px">Carregando histórico de simulações...</div>';
     if(pagination){ pagination.style.display='none'; pagination.innerHTML=''; }
     return;
   }
@@ -2656,7 +3204,7 @@ function ffCatalogRender(){
 
   const simList=[...(_ffCatalogData.sims||[])].sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
   if(!simList.length){
-    sims.innerHTML='<div style="padding:12px;border:1px dashed var(--border);border-radius:8px;color:var(--gray);font-size:13px">Nenhuma simulação salva.</div>';
+    sims.innerHTML='<div style="padding:12px;border:1px dashed var(--border);border-radius:8px;color:var(--gray);font-size:13px">Nenhuma simulação no histórico.</div>';
   } else {
     sims.innerHTML=simList.map(s=>{
       const tipo=s.type==='ambiente'?'Ambiente':'Quadro';
@@ -2667,8 +3215,9 @@ function ffCatalogRender(){
             '<div style="font-size:12px;font-weight:700;color:var(--brown)">'+_esc(s.title||('Simulação '+tipo))+'</div>'+
             '<div style="font-size:10px;color:var(--gray);margin-top:2px">'+_esc(tipo)+' • '+_esc(_fmtDataHora(s.createdAt))+'</div>'+
             '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:6px;margin-top:8px">'+
-              '<button class="btn" style="'+cardBtnStyle+';'+cardBtnPrimary+'" onclick="ffCatalogOpenSimulation(\''+s.id+'\')">Abrir</button>'+
-              '<button class="btn dark" style="'+cardBtnStyle+';'+cardBtnDanger+'" onclick="ffCatalogDeleteSimulation(\''+s.id+'\')">Excluir</button>'+
+              '<button class="btn" style="'+cardBtnStyle+';'+cardBtnPrimary+'" onclick="ffCatalogOpenSimulation(\''+s.id+'\')">Restaurar</button>'+
+              '<button class="btn dark" style="'+cardBtnStyle+';'+cardBtnSecondaryStrong+'" onclick="ffCatalogSaveSimulationToCatalog(\''+s.id+'\')">Salvar no Catálogo</button>'+
+              '<button class="btn dark" style="'+cardBtnStyle+';'+cardBtnDanger+'" onclick="ffCatalogDeleteSimulation(\''+s.id+'\')">Remover</button>'+
             '</div>'+
           '</div>'+
         '</div>'+
@@ -2764,9 +3313,68 @@ async function ffCatalogUseItem(itemId, target){
   const it=(_ffCatalogData.items||[]).find(x=>x.id===itemId);
   if(!it) return;
   try{
+    if(it.fromSimulation===true && it.simType==='quadro' && it.simCfg){
+      const cfg=_ffCloneCfg(it.simCfg);
+      if(target==='quadro'){
+        const ok=await _ffCatalogApplyQuadroCfgNoSimulador(cfg);
+        if(ok){ toast('Simulação aplicada no Simulador de Quadros.'); return; }
+      }
+      if(target==='ambiente'){
+        _ffSkipNextSplitAutoApplyAmbiente=true;
+        switchTab('simulador');
+        const splitSaved=Boolean(cfg.splitActive && cfg.splitMeta && (cfg.splitMeta.n||0)>1);
+        if(splitSaved && cfg.splitSourceSrc){
+          const srcImg=await _ffLoadImageFromSrc(cfg.splitSourceSrc);
+          const meta={
+            ...cfg.splitMeta,
+            partWidths:[...(cfg.splitMeta.partWidths||[])],
+            partHeights:[...(cfg.splitMeta.partHeights||[])],
+          };
+          _ffSplitComposicaoMeta=meta;
+          _ffSplitComposicaoAtiva=true;
+          const layoutData=await _ffSplitCreatePanelImages(meta,srcImg);
+          const ok=_ffSplitApplyPanelsToWall(layoutData);
+          if(ok){
+            (wallFrames||[]).forEach((f)=>{
+              f.frameColor=cfg.frameColor||f.frameColor;
+              f.frameW=(cfg.frameW!==undefined)?cfg.frameW:f.frameW;
+              f.ppOn=(cfg.ppOn!==undefined)?Boolean(cfg.ppOn):f.ppOn;
+              f.ppColor=cfg.ppColor||f.ppColor;
+              f.ppSize=(cfg.ppSize!==undefined)?cfg.ppSize:f.ppSize;
+            });
+            if(typeof ffSplitSetWallGap==='function' && _ffSplitWallLayoutState) ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+            toast('Composição aplicada no Simulador de Ambiente.');
+            return;
+          }
+        }
+
+        // Quadro simples salvo no histórico: usar arte original para evitar moldura duplicada.
+        const artSrc=cfg.imageSrc || it.src;
+        const imgSim=await _ffLoadImageFromSrc(artSrc);
+        const dims={ w:parseFloat(cfg.w)||50, h:parseFloat(cfg.h)||70 };
+        wallAddFrame(imgSim);
+        _ffCatalogFitSelectedWallFrame(imgSim, dims);
+        if(Array.isArray(wallFrames) && wallSelectedIdx>=0 && wallFrames[wallSelectedIdx]){
+          const f=wallFrames[wallSelectedIdx];
+          f.frameColor=cfg.frameColor||f.frameColor;
+          f.frameW=(cfg.frameW!==undefined)?cfg.frameW:f.frameW;
+          f.ppOn=(cfg.ppOn!==undefined)?Boolean(cfg.ppOn):f.ppOn;
+          f.ppColor=cfg.ppColor||f.ppColor;
+          f.ppSize=(cfg.ppSize!==undefined)?cfg.ppSize:f.ppSize;
+          if(typeof _wallUpdatePanelFromSelected==='function') _wallUpdatePanelFromSelected();
+          if(typeof renderWall==='function') renderWall();
+        }
+        toast('Simulação aplicada no Simulador de Ambiente.');
+        return;
+      }
+    }
+
     const img=await _ffLoadImageFromSrc(it.src);
     const dims = _ffCatalogDims50x70ForImage(img);
     if(target==='quadro'){
+      _ffSplitComposicaoAtiva=false;
+      _ffSplitComposicaoMeta=null;
+      _ffSplitReplayImg=null;
       sqImg={img,file:{name:it.title||'catalogo.jpg',size:0},w:img.naturalWidth||img.width,h:img.naturalHeight||img.height};
       switchTab('simquadro');
       showSQ();
@@ -2779,6 +3387,7 @@ async function ffCatalogUseItem(itemId, target){
       return;
     }
     if(target==='ambiente'){
+      _ffSkipNextSplitAutoApplyAmbiente=true;
       switchTab('simulador');
       wallAddFrame(img);
       _ffCatalogFitSelectedWallFrame(img, dims);
@@ -2787,6 +3396,7 @@ async function ffCatalogUseItem(itemId, target){
     }
     if(target==='fundo'){
       wEnvImg=img;
+      _ffSkipNextSplitAutoApplyAmbiente=true;
       switchTab('simulador');
       if(typeof checkWall==='function') checkWall();
       toast('Imagem aplicada como fundo do ambiente.');
@@ -2817,6 +3427,54 @@ function _ffCatalogFitSelectedWallFrame(img, dims){
   if(typeof renderWall === 'function') renderWall();
 }
 
+function _ffCloneCfg(obj){
+  try{ return JSON.parse(JSON.stringify(obj||{})); }
+  catch(_){ return {}; }
+}
+
+async function _ffCatalogApplyQuadroCfgNoSimulador(cfg){
+  const imageSrc = cfg?.imageSrc || cfg?.renderSrc || '';
+  if(!imageSrc) return false;
+
+  const img=await _ffLoadImageFromSrc(imageSrc);
+  const splitSaved=Boolean(cfg?.splitActive && cfg?.splitMeta && (cfg.splitMeta.n||0)>1);
+  _ffResetQuadroSimulationState();
+  _ffSplitComposicaoAtiva=splitSaved;
+  _ffSplitComposicaoMeta=splitSaved ? {
+    ...cfg.splitMeta,
+    partWidths:[...(cfg.splitMeta.partWidths||[])],
+    partHeights:[...(cfg.splitMeta.partHeights||[])],
+  } : null;
+  _ffSplitReplayImg=null;
+  if(splitSaved && cfg?.splitSourceSrc){
+    try{ _ffSplitReplayImg=await _ffLoadImageFromSrc(cfg.splitSourceSrc); }catch(_){ _ffSplitReplayImg=null; }
+  }
+
+  sqImg={img,file:{name:'catalogo-simulacao.jpg',size:0},w:img.naturalWidth||img.width,h:img.naturalHeight||img.height};
+  switchTab('simquadro');
+  showSQ();
+
+  if(cfg?.w) document.getElementById('sqW').value=cfg.w;
+  if(cfg?.h) document.getElementById('sqH').value=cfg.h;
+  if(cfg?.frameW!==undefined) document.getElementById('sqFrameW').value=cfg.frameW;
+  if(cfg?.ppOn!==undefined) document.getElementById('sqPpEnabled').checked=Boolean(cfg.ppOn);
+  if(cfg?.ppSize!==undefined){
+    document.getElementById('sqPpSize').value=cfg.ppSize;
+    const lbl=document.getElementById('sqPpSizeL'); if(lbl) lbl.textContent=cfg.ppSize+'cm';
+  }
+  if(cfg?.frameColor){ sqFrameColor=cfg.frameColor; const p=document.getElementById('sqFrameColorPicker'); if(p) p.value=cfg.frameColor; }
+  if(cfg?.ppColor){ sqPpColor=cfg.ppColor; const p=document.getElementById('sqPpColorPicker'); if(p) p.value=cfg.ppColor; }
+  if(cfg?.bgColor){ sqBgColor=cfg.bgColor; const p=document.getElementById('sqBgPicker'); if(p) p.value=cfg.bgColor; }
+  renderFrame();
+  return true;
+}
+
+function _ffResetQuadroSimulationState(){
+  _ffSplitComposicaoAtiva=false;
+  _ffSplitComposicaoMeta=null;
+  _ffSplitReplayImg=null;
+}
+
 function ffCatalogDeleteItem(itemId){
   ffCatalogInit();
   const it=(_ffCatalogData.items||[]).find(x=>x.id===itemId);
@@ -2835,8 +3493,21 @@ function ffCatalogSaveCurrentQuadro(){
   if(!sqImg){ toast('Abra o Simulador de Quadros e carregue uma imagem primeiro.'); return; }
   const canvas=document.getElementById('frameCanvas');
   const preview=(canvas&&canvas.width>1)?canvas.toDataURL('image/jpeg',0.76):'';
+  const splitActive=Boolean(_ffSplitComposicaoAtiva && _ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1);
+  const splitMeta=splitActive ? {
+    ..._ffSplitComposicaoMeta,
+    partWidths:[...(_ffSplitComposicaoMeta.partWidths||[])],
+    partHeights:[...(_ffSplitComposicaoMeta.partHeights||[])],
+  } : null;
+  const splitSourceImg = splitActive
+    ? (_ffSplitReplayImg || (cImg&&cImg.img) || (sqImg&&sqImg.img) || null)
+    : null;
   const cfg={
     imageSrc:_imgElementParaBase64(sqImg,0.68),
+    renderSrc:(canvas&&canvas.width>1)?canvas.toDataURL('image/jpeg',0.86):'',
+    splitActive,
+    splitMeta,
+    splitSourceSrc:splitSourceImg ? _imgElementParaBase64(splitSourceImg,0.82) : '',
     w:parseFloat(document.getElementById('sqW')?.value||80),
     h:parseFloat(document.getElementById('sqH')?.value||60),
     frameW:parseFloat(document.getElementById('sqFrameW')?.value||0),
@@ -2891,8 +3562,21 @@ async function ffCatalogOpenSimulation(simId){
   try{
     if(sim.type==='quadro'){
       const cfg=sim.cfg||{};
-      if(!cfg.imageSrc) throw new Error('Simulação sem imagem.');
-      const img=await _ffLoadImageFromSrc(cfg.imageSrc);
+      const imageSrc=cfg.imageSrc || cfg.renderSrc || sim.preview || '';
+      if(!imageSrc) throw new Error('Simulação sem imagem.');
+      _ffResetQuadroSimulationState();
+      const img=await _ffLoadImageFromSrc(imageSrc);
+      const splitSaved=Boolean(cfg.splitActive && cfg.splitMeta && (cfg.splitMeta.n||0)>1);
+      _ffSplitComposicaoAtiva=splitSaved;
+      _ffSplitComposicaoMeta=splitSaved ? {
+        ...cfg.splitMeta,
+        partWidths:[...(cfg.splitMeta.partWidths||[])],
+        partHeights:[...(cfg.splitMeta.partHeights||[])],
+      } : null;
+      _ffSplitReplayImg=null;
+      if(splitSaved && cfg.splitSourceSrc){
+        try{ _ffSplitReplayImg=await _ffLoadImageFromSrc(cfg.splitSourceSrc); }catch(_){ _ffSplitReplayImg=null; }
+      }
       sqImg={img,file:{name:'simulacao.jpg',size:0},w:img.naturalWidth||img.width,h:img.naturalHeight||img.height};
       switchTab('simquadro');
       showSQ();
@@ -2932,6 +3616,7 @@ async function ffCatalogOpenSimulation(simId){
     wallFrames=frames;
     wallSelectedIdx=frames.length?0:-1;
     wArtImg=frames.length?frames[0].img:null;
+    _ffSkipNextSplitAutoApplyAmbiente=true;
     switchTab('simulador');
     checkWall();
     if(typeof _wallRenderPanel==='function') _wallRenderPanel();
@@ -2954,6 +3639,67 @@ function ffCatalogDeleteSimulation(simId){
   if(!_ffCatalogPersist()) return;
   ffCatalogRender();
   toast('Simulação removida.');
+}
+
+function _ffCatalogPickFolderForSimulation(){
+  ffCatalogInit();
+  if(!Array.isArray(_ffCatalogData.folders) || !_ffCatalogData.folders.length) _ffCatalogEnsureDefaultFolder();
+  const folders=[...(_ffCatalogData.folders||[])].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const lines=folders.map((f,idx)=>`${idx+1}. ${f.name}`);
+  const msg='Salvar em qual pasta?\n\n'+lines.join('\n')+'\n\nDigite o número da pasta ou um nome novo para criar.';
+  const raw=prompt(msg, '1');
+  if(raw===null) return null;
+  const input=String(raw||'').trim();
+  if(!input) return folders[0]?.id || _ffCatalogEnsureDefaultFolder().id;
+
+  const num=parseInt(input,10);
+  if(Number.isFinite(num) && num>=1 && num<=folders.length){
+    return folders[num-1].id;
+  }
+
+  const name=_ffCatalogSanitizeName(input,'Nova Pasta');
+  const existing=(_ffCatalogData.folders||[]).find(f=>String(f.name||'').toLowerCase()===name.toLowerCase());
+  if(existing) return existing.id;
+
+  const folder={ id:_ffCatalogId('folder'), name, createdAt:new Date().toISOString() };
+  _ffCatalogData.folders.push(folder);
+  return folder.id;
+}
+
+function ffCatalogSaveSimulationToCatalog(simId){
+  ffCatalogInit();
+  const sim=(_ffCatalogData.sims||[]).find(s=>s.id===simId);
+  if(!sim) return;
+
+  const folderId=_ffCatalogPickFolderForSimulation();
+  if(!folderId) return;
+
+  const cfg=sim.cfg||{};
+  const src=cfg.renderSrc || sim.preview || cfg.imageSrc || cfg.envSrc || '';
+  if(!src){
+    toast('Esta simulação não possui imagem para salvar no catálogo.');
+    return;
+  }
+
+  const tipoLabel=sim.type==='ambiente'?'Ambiente':'Quadro';
+  const created=_fmtDataHora(sim.createdAt);
+  _ffCatalogData.items.push({
+    id:_ffCatalogId('item'),
+    folderId,
+    type:'image',
+    title:(sim.title || `${tipoLabel} ${created}`),
+    tags:`simulacao, historico, ${sim.type||'quadro'}`,
+    sourceName:`sim-${sim.id}.jpg`,
+    src,
+    fromSimulation:true,
+    simType:sim.type||'quadro',
+    simCfg:_ffCloneCfg(cfg),
+    createdAt:new Date().toISOString(),
+  });
+
+  if(!_ffCatalogPersist()) return;
+  ffCatalogRender();
+  toast('Simulação salva no catálogo.');
 }
 
 async function ffCatalogExport(){
@@ -4190,6 +4936,7 @@ function _coletarImagemAmbienteBase64() {
 
 function _aplicarImagemQuadroBase64(dataUrl, onReady) {
   if (!dataUrl) return;
+  _ffSplitComposicaoAtiva=false;
   const img = new Image();
   img.onload = function() {
     sqImg = {
@@ -4909,6 +5656,7 @@ async function carregarUsuariosSistema() {
       const actionBtn = u.is_active
         ? '<button class="btn dark" style="padding:7px 10px;font-size:11px;background:#B22222;border-color:#B22222" onclick="desativarUsuarioSistema(' + u.id + ')"' + (isCurrent ? ' disabled' : '') + '>Desativar</button>'
         : '<button class="btn dark" style="padding:7px 10px;font-size:11px;background:#2E7D52;border-color:#2E7D52" onclick="ativarUsuarioSistema(' + u.id + ')">Ativar</button>';
+      const deleteBtn = '<button class="btn dark" style="padding:7px 10px;font-size:11px;background:#7A1B1B;border-color:#7A1B1B" onclick="excluirUsuarioSistema(' + u.id + ')"' + (isCurrent ? ' disabled' : '') + '>Excluir</button>';
 
       return (
         '<div style="border:1px solid var(--border2);border-radius:8px;background:#fff;padding:12px">' +
@@ -4924,6 +5672,7 @@ async function carregarUsuariosSistema() {
             '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
               '<button class="btn dark" style="padding:7px 10px;font-size:11px" onclick="editarUsuarioSistema(' + u.id + ')">Editar</button>' +
               actionBtn +
+              deleteBtn +
             '</div>' +
           '</div>' +
           '<div style="margin-top:8px;font-size:11px;color:var(--gray)">Clientes: ' + (u.total_clientes || 0) + ' • Atendimentos: ' + (u.total_consultas || 0) + '</div>' +
@@ -5098,6 +5847,30 @@ async function desativarUsuarioSistema(userId) {
     await carregarUsuariosSistema();
   } catch (err) {
     toast(err.message || 'Erro ao desativar unidade.');
+  }
+}
+
+async function excluirUsuarioSistema(userId) {
+  const user = _usuariosSistemaPorId[userId];
+  if (!user) return;
+
+  const nome = (user.name || user.access_display_name || user.access_username || '').trim();
+  const ok = window.confirm('EXCLUSAO DEFINITIVA da unidade "' + nome + '"?\n\nEsta acao apaga login, clientes, atendimentos, catalogo e simulacoes dessa unidade.\n\nEssa acao nao pode ser desfeita.');
+  if (!ok) return;
+
+  const okFinal = window.confirm('Confirmacao final: deseja realmente EXCLUIR PERMANENTEMENTE a unidade "' + nome + '"?');
+  if (!okFinal) return;
+
+  try {
+    await _ffApi('/api/stores/' + userId + '/purge', { method: 'DELETE' });
+    if (_usuarioEdicaoId === userId) cancelarEdicaoUsuario();
+    toast('Unidade excluida permanentemente.');
+    await carregarUsuariosSistema();
+    if (typeof adminDashboardLoad === 'function') {
+      await adminDashboardLoad();
+    }
+  } catch (err) {
+    toast(err.message || 'Erro ao excluir unidade.');
   }
 }
 
