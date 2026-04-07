@@ -1088,6 +1088,7 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
               <button class="dl-btn pri" style="flex:1" onclick="dlFrame('pdf')">⬇ PDF</button>
               <button class="dl-btn" style="flex:1;background:#24497E;color:#fff;border-color:#24497E" onclick="dlFrame('jpg')">⬇ JPEG</button>
             </div>
+            <button class="btn" style="width:100%;margin-top:8px" onclick="ffCatalogSaveCurrentQuadro()">💾 Salvar Quadro na Biblioteca</button>
             <button onclick="compartilharSimulacaoNoWhatsApp('quadro')" style="width:100%;margin-top:8px;padding:11px;background:#128C7E;color:#fff;border:none;border-radius:6px;font-family:'Avenir','Nunito',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📲 WhatsApp + Imagem</button>
             <button onclick="abrirOrcamento('quadro')" style="width:100%;margin-top:8px;padding:11px;background:linear-gradient(135deg,#2E7D52,#3A9E68);color:#fff;border:none;border-radius:6px;font-family:'Avenir','Nunito',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📄 Gerar Orçamento</button>
           </div>
@@ -1286,6 +1287,9 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
               <button id="wallGuidesBtn" onclick="toggleWallGuides()"
                 style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.5);background:rgba(178,34,34,0.85);color:#fff;font-family:'Avenir','Nunito',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;cursor:pointer;backdrop-filter:blur(2px);transition:background .2s"
                 title="Guias ativadas (clique para desativar)">⊕ Guias ON</button>
+              <button id="wallCompLockBtn" onclick="toggleWallCompositionLock()"
+                style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.5);background:rgba(26,48,81,0.85);color:#fff;font-family:'Avenir','Nunito',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;cursor:pointer;backdrop-filter:blur(2px);transition:background .2s"
+                title="Destravada: quadros movem individualmente">🔓 Composição</button>
               <button onclick="wallClearAll()"
                 style="padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.5);background:rgba(26,48,81,0.85);color:#fff;font-family:'Avenir','Nunito',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;cursor:pointer;transition:background .2s"
                 title="Remover todos os quadros">🗑 Limpar</button>
@@ -1305,6 +1309,7 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
             <button class="dl-btn pri" style="flex:1" onclick="dlWall('pdf')">⬇ PDF</button>
             <button class="dl-btn" style="flex:1;background:#24497E;color:#fff;border-color:#24497E" onclick="dlWall('jpg')">⬇ JPEG</button>
           </div>
+          <button class="btn" style="width:100%;margin-top:8px" onclick="ffCatalogSaveCurrentAmbiente()">💾 Salvar Ambiente na Biblioteca</button>
           <button onclick="compartilharSimulacaoNoWhatsApp('ambiente')" style="width:100%;margin-top:8px;padding:11px;background:#128C7E;color:#fff;border:none;border-radius:6px;font-family:'Avenir','Nunito',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📲 WhatsApp + Imagem</button>
           <button onclick="abrirOrcamento('ambiente')" style="width:100%;margin-top:8px;padding:11px;background:linear-gradient(135deg,#2E7D52,#3A9E68);color:#fff;border:none;border-radius:6px;font-family:'Avenir','Nunito',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📄 Gerar Orçamento</button>
         </div>
@@ -1378,6 +1383,15 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
               <div class="sl-row">
                 <div class="sl-label">Sombra <span id="wSL">Média</span></div>
                 <input type="range" id="wS" min="0" max="3" value="2" step="1" oninput="renderWallFromSliders()">
+              </div>
+
+              <div id="wCompGapWrap" style="display:none;margin-top:14px;padding:10px;border:1px solid var(--border2);border-radius:8px;background:var(--cream2)">
+                <div style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;margin-bottom:8px">Composição</div>
+                <div class="sl-row" style="margin-bottom:0">
+                  <div class="sl-label">Espaçamento entre quadros <span id="wCompGapL">1.2cm</span></div>
+                  <input type="range" id="wCompGap" min="0" max="10" value="1.2" step="0.1"
+                    oninput="document.getElementById('wCompGapL').textContent=this.value+'cm';ffSplitSetWallGap(this.value)">
+                </div>
               </div>
 
               <!-- Moldura -->
@@ -1514,12 +1528,8 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
         </div>
 
         <div class="canvas-card">
-          <div class="card-h" style="margin-bottom:10px">Simulações Salvas</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-            <button class="btn" onclick="ffCatalogSaveCurrentQuadro()">Salvar Quadro Atual</button>
-            <button class="btn dark" onclick="ffCatalogSaveCurrentAmbiente()">Salvar Ambiente Atual</button>
-          </div>
-          <div style="font-size:11px;color:var(--gray);margin-bottom:10px">As simulações ficam salvas no navegador para reabrir, editar e gerar novos orçamentos.</div>
+          <div class="card-h" style="margin-bottom:10px">Histórico de Simulações</div>
+          <div style="font-size:11px;color:var(--gray);margin-bottom:10px">Histórico cronológico das simulações criadas para restaurar rapidamente quadro ou ambiente.</div>
           <div id="catSimsList" style="display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto"></div>
         </div>
       </div>

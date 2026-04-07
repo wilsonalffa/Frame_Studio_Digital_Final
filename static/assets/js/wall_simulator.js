@@ -39,6 +39,55 @@ let wallResizeHandle = '';
 let wallResizeStartX = 0, wallResizeStartY = 0;
 let wallResizeStartFrame = null;
 let _wallRenderPending = false;
+let wallCompositionLocked = false;
+let wallGroupDragging = false;
+let wallGroupStart = null;
+
+function _wallHasCompositionFrames() {
+  return Array.isArray(wallFrames) && wallFrames.some(f => f && f._ffCompPanel === true);
+}
+
+function _wallCompFrames() {
+  return (wallFrames || []).filter(f => f && f._ffCompPanel === true);
+}
+
+function _wallApplyLockedComposition(mutator) {
+  const selected = wallFrames[wallSelectedIdx];
+  if (!selected || !wallCompositionLocked || selected._ffCompPanel !== true) return false;
+  const frames = _wallCompFrames();
+  if (!frames.length) return false;
+  frames.forEach(mutator);
+  return true;
+}
+
+function _wallUpdateCompositionLockBtn() {
+  const btn = document.getElementById('wallCompLockBtn');
+  if (!btn) return;
+  const hasComp = _wallHasCompositionFrames();
+  if (!hasComp) wallCompositionLocked = false;
+  btn.disabled = !hasComp;
+  btn.style.opacity = hasComp ? '1' : '.55';
+  btn.style.cursor = hasComp ? 'pointer' : 'not-allowed';
+  btn.style.background = wallCompositionLocked ? 'rgba(178,34,34,0.85)' : 'rgba(26,48,81,0.85)';
+  btn.textContent = wallCompositionLocked ? '🔒 Composição' : '🔓 Composição';
+  btn.title = hasComp
+    ? (wallCompositionLocked
+      ? 'Travada: arraste um quadro da composição para mover todos juntos'
+      : 'Destravada: quadros movem individualmente')
+    : 'Disponível quando houver composição com múltiplos quadros';
+}
+
+function toggleWallCompositionLock() {
+  if (!_wallHasCompositionFrames()) {
+    _wallUpdateCompositionLockBtn();
+    return toast('Aplique uma composição para habilitar o cadeado.');
+  }
+  wallCompositionLocked = !wallCompositionLocked;
+  _wallUpdateCompositionLockBtn();
+  toast(wallCompositionLocked
+    ? 'Composição travada: mova todos os quadros juntos.'
+    : 'Composição destravada: movimento individual reativado.');
+}
 
 // Estrutura de um quadro:
 // { img, xP, yP, wCm, hCm, frameColor, frameW, ppOn, ppColor, ppSize, shadow, id }
@@ -126,6 +175,7 @@ function wallAddFrame(img) {
   checkWall();
   _wallRenderPanel();
   _wallUpdatePanelFromSelected();
+  _wallUpdateCompositionLockBtn();
   toast('Quadro ' + wallFrames.length + ' adicionado!');
 }
 
@@ -137,6 +187,7 @@ function wallRemoveSelected() {
   renderWall();
   _wallRenderPanel();
   _wallUpdatePanelFromSelected();
+  _wallUpdateCompositionLockBtn();
 }
 
 function wallSelectFrame(idx) {
@@ -152,8 +203,12 @@ function wallClearAll() {
   wallFrames = [];
   wallSelectedIdx = -1;
   wArtImg = null;
+  wallCompositionLocked = false;
+  wallGroupDragging = false;
+  wallGroupStart = null;
   renderWall();
   _wallRenderPanel();
+  _wallUpdateCompositionLockBtn();
   document.getElementById('wControls').style.display = 'none';
 }
 
@@ -164,6 +219,7 @@ function _wallRenderPanel() {
   if (!panel) return;
   if (!wallFrames.length) {
     panel.innerHTML = '<div style="font-size:12px;color:var(--gray);padding:8px 0;text-align:center">Nenhum quadro adicionado</div>';
+    _wallUpdateCompositionLockBtn();
     return;
   }
   panel.innerHTML = wallFrames.map((f, i) => {
@@ -204,6 +260,7 @@ function _wallRenderPanel() {
       ctx.drawImage(f.img, 0, 0, 36, 28);
     });
   });
+  _wallUpdateCompositionLockBtn();
 }
 
 // ── Sincronizar painel de controles → quadro selecionado ──
@@ -581,6 +638,47 @@ function wallInitDrag() {
     if (hit >= 0) {
       wallSelectFrame(hit);
       const f = wallFrames[hit];
+      if (wallCompositionLocked && f && f._ffCompPanel === true) {
+        const compFrames = _wallCompFrames();
+        if (compFrames.length) {
+          wallDragging = false;
+          wallResizing = false;
+          wallGroupDragging = true;
+          wallGroupStart = {
+            anchorXP: f.xP,
+            anchorYP: f.yP,
+            baseCenterX: (typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState)
+              ? (_ffSplitWallLayoutState.baseCenterX || 50)
+              : 50,
+            baseCenterY: (typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState)
+              ? (_ffSplitWallLayoutState.baseCenterY || 38)
+              : 38,
+            frames: compFrames.map(cf => ({ ref: cf, xP: cf.xP, yP: cf.yP })),
+          };
+          const fx = f.xP / 100 * cW;
+          const fy = f.yP / 100 * cH;
+          wallDragOffX = x - fx;
+          wallDragOffY = y - fy;
+          cvs.style.cursor = 'grabbing';
+          return;
+        }
+      }
+      const handle = _wallGetHandle(x, y, f, cW, cH, ppc);
+      if (handle) {
+        wallDragging = false;
+        wallResizing = true;
+        wallResizeHandle = handle;
+        wallResizeStartX = x;
+        wallResizeStartY = y;
+        wallResizeStartFrame = {
+          wCm: f.wCm,
+          hCm: f.hCm,
+          xP: f.xP,
+          yP: f.yP,
+        };
+        cvs.style.cursor = handle + '-resize';
+        return;
+      }
       const fx = f.xP / 100 * cW;
       const fy = f.yP / 100 * cH;
       wallDragOffX = x - fx;
@@ -602,6 +700,73 @@ function wallInitDrag() {
     const ppc = getPPC();
     const cW = cvs.width, cH = cvs.height;
 
+    if (wallGroupDragging && wallGroupStart && wallSelectedIdx >= 0) {
+      e.preventDefault();
+      const selected = wallFrames[wallSelectedIdx];
+      if (!selected) return;
+      const newX = x - wallDragOffX;
+      const newY = y - wallDragOffY;
+      let deltaX = Math.max(2, Math.min(98, newX / cW * 100)) - wallGroupStart.anchorXP;
+      let deltaY = Math.max(2, Math.min(98, newY / cH * 100)) - wallGroupStart.anchorYP;
+
+      let minDX = -999, maxDX = 999, minDY = -999, maxDY = 999;
+      wallGroupStart.frames.forEach(item => {
+        minDX = Math.max(minDX, 2 - item.xP);
+        maxDX = Math.min(maxDX, 98 - item.xP);
+        minDY = Math.max(minDY, 2 - item.yP);
+        maxDY = Math.min(maxDY, 98 - item.yP);
+      });
+      deltaX = Math.max(minDX, Math.min(maxDX, deltaX));
+      deltaY = Math.max(minDY, Math.min(maxDY, deltaY));
+
+      wallGroupStart.frames.forEach(item => {
+        item.ref.xP = item.xP + deltaX;
+        item.ref.yP = item.yP + deltaY;
+      });
+
+      if (typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState) {
+        _ffSplitWallLayoutState.baseCenterX = Math.max(2, Math.min(98, (wallGroupStart.baseCenterX || 50) + deltaX));
+        _ffSplitWallLayoutState.baseCenterY = Math.max(2, Math.min(98, (wallGroupStart.baseCenterY || 38) + deltaY));
+      }
+
+      _wallUpdatePanelFromSelected();
+      _wallRenderPanel();
+      renderWall();
+      return;
+    }
+
+    if (wallResizing && wallSelectedIdx >= 0 && wallResizeStartFrame) {
+      e.preventDefault();
+      const f = wallFrames[wallSelectedIdx];
+      const dxCm = (x - wallResizeStartX) / ppc;
+      const dyCm = (y - wallResizeStartY) / ppc;
+      const affectsW = /e|w/.test(wallResizeHandle);
+      const affectsH = /n|s/.test(wallResizeHandle);
+      const dirW = wallResizeHandle.includes('w') ? -1 : 1;
+      const dirH = wallResizeHandle.includes('n') ? -1 : 1;
+
+      let nextW = wallResizeStartFrame.wCm;
+      let nextH = wallResizeStartFrame.hCm;
+      if (affectsW) nextW = Math.max(5, Math.round((wallResizeStartFrame.wCm + dxCm * dirW) * 10) / 10);
+      if (affectsH) nextH = Math.max(5, Math.round((wallResizeStartFrame.hCm + dyCm * dirH) * 10) / 10);
+
+      f.wCm = nextW;
+      f.hCm = nextH;
+
+      if (typeof ffSplitScaleWallCompositionFromFrame === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f._ffCompPanel === true) {
+        let prefer = 'auto';
+        if (affectsW && !affectsH) prefer = 'width';
+        else if (!affectsW && affectsH) prefer = 'height';
+        ffSplitScaleWallCompositionFromFrame(f, { prefer });
+        return;
+      }
+
+      _wallUpdatePanelFromSelected();
+      _wallRenderPanel();
+      renderWall();
+      return;
+    }
+
     if (wallDragging && wallSelectedIdx >= 0) {
       e.preventDefault();
       const f = wallFrames[wallSelectedIdx];
@@ -621,14 +786,24 @@ function wallInitDrag() {
     }
 
     // Cursor hover
+    if (wallSelectedIdx >= 0) {
+      const selected = wallFrames[wallSelectedIdx];
+      const handle = selected ? _wallGetHandle(x, y, selected, cW, cH, ppc) : null;
+      if (handle) {
+        cvs.style.cursor = handle + '-resize';
+        return;
+      }
+    }
     const hit = _wallHitTest(x, y, cW, cH, ppc);
     cvs.style.cursor = hit >= 0 ? 'grab' : 'default';
   }
 
   function onUp() {
-    if (wallDragging || wallResizing) {
+    if (wallDragging || wallResizing || wallGroupDragging) {
       wallDragging = false;
       wallResizing = false;
+      wallGroupDragging = false;
+      wallGroupStart = null;
       wallResizeStartFrame = null;
       _wallRenderPanel();
       _wallUpdatePanelFromSelected();
@@ -661,6 +836,7 @@ function checkWall() {
 
   if (wallFrames.length > 0) {
     document.getElementById('wControls').style.display = 'block';
+    _wallUpdateCompositionLockBtn();
     renderWall();
   } else {
     // Só mostra fundo sem quadros
@@ -669,6 +845,7 @@ function checkWall() {
     c.width = mw;
     c.height = Math.round(wEnvImg.naturalHeight * mw / wEnvImg.naturalWidth);
     c.getContext('2d').drawImage(wEnvImg, 0, 0, c.width, c.height);
+    _wallUpdateCompositionLockBtn();
   }
 }
 
@@ -677,6 +854,10 @@ function togglePP() {
   ppActive = document.getElementById('ppEnabled').checked;
   if (f) f.ppOn = ppActive;
   document.getElementById('ppControls').style.display = ppActive ? 'block' : 'none';
+  if (typeof ffSplitSetWallGap === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f && f._ffCompPanel === true) {
+    ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+    return;
+  }
   renderWall();
 }
 
@@ -695,24 +876,39 @@ function setPPColor(color, idx) {
 function setWallFrameColor(c) {
   wallFrameColor = c;
   const f = wallFrames[wallSelectedIdx];
-  if (f) f.frameColor = c;
+  if (f) {
+    if (!_wallApplyLockedComposition(fr => { fr.frameColor = c; })) {
+      f.frameColor = c;
+    }
+  }
   // atualizar picker
   const pick = document.getElementById('wFrameColorPicker');
   if (pick) pick.value = c || '#3C2F1E';
+  if (typeof ffSplitSetWallGap === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f && f._ffCompPanel === true) {
+    ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+    return;
+  }
   renderWall();
 }
 
 function wallSetFrameW(val) {
   const f = wallFrames[wallSelectedIdx];
   if (!f) return;
-  f.frameW = parseFloat(val) || 0;
+  const frameW = parseFloat(val) || 0;
+  if (!_wallApplyLockedComposition(fr => { fr.frameW = frameW; })) {
+    f.frameW = frameW;
+  }
   // sincronizar slider e input
   const sl = document.getElementById('wFrameW');
   const inp = document.getElementById('wFrameWInput');
   const lbl = document.getElementById('wFrameWL');
-  if (sl)  sl.value = f.frameW;
-  if (inp) inp.value = f.frameW;
-  if (lbl) lbl.textContent = f.frameW + 'cm';
+  if (sl)  sl.value = frameW;
+  if (inp) inp.value = frameW;
+  if (lbl) lbl.textContent = frameW + 'cm';
+  if (typeof ffSplitSetWallGap === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f._ffCompPanel === true) {
+    ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+    return;
+  }
   renderWall();
 }
 
@@ -725,12 +921,28 @@ function wallSetSizeFromInput() {
   const hVal = parseFloat(hInp?.value);
   if (wVal > 0) { f.wCm = wVal; const sl = document.getElementById('wW'); if (sl) sl.value = wVal; const lb = document.getElementById('wWL'); if (lb) lb.textContent = wVal + 'cm'; }
   if (hVal > 0) { f.hCm = hVal; const sl = document.getElementById('wH'); if (sl) sl.value = hVal; const lb = document.getElementById('wHL'); if (lb) lb.textContent = hVal + 'cm'; }
+  if (typeof ffSplitScaleWallCompositionFromFrame === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f._ffCompPanel === true) {
+    const activeId = document.activeElement?.id || '';
+    const prefer = activeId === 'wHInput' ? 'height' : 'width';
+    ffSplitScaleWallCompositionFromFrame(f, { prefer });
+    return;
+  }
+  if (typeof ffSplitSetWallGap === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f._ffCompPanel === true) {
+    ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+    return;
+  }
   _wallRenderPanel();
   renderWall();
 }
 
 function renderWallFromSliders() {
   _wallApplyPanelToSelected();
+  const f = wallFrames[wallSelectedIdx];
+  const activeId = document.activeElement?.id || '';
+  if (typeof ffSplitSetWallGap === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && f && f._ffCompPanel === true && activeId === 'ppSize') {
+    ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+    return;
+  }
   renderWall();
   _wallRenderPanel();
 }
@@ -846,13 +1058,20 @@ function wallCopyStyleToAll() {
     if (i === wallSelectedIdx) return;
     f.frameColor = src.frameColor;
     f.frameW     = src.frameW;
+    f.wCm        = src.wCm;
+    f.hCm        = src.hCm;
     f.ppOn       = src.ppOn;
     f.ppColor    = src.ppColor;
     f.ppSize     = src.ppSize;
     f.shadow     = src.shadow;
   });
+  if (typeof ffSplitSetWallGap === 'function' && typeof _ffSplitWallLayoutState !== 'undefined' && _ffSplitWallLayoutState && src._ffCompPanel === true) {
+    ffSplitSetWallGap(_ffSplitWallLayoutState.gapCm);
+    toast('Estilo e tamanho copiados para todos os ' + wallFrames.length + ' quadros!');
+    return;
+  }
   renderWall();
-  toast('Estilo copiado para todos os ' + wallFrames.length + ' quadros!');
+  toast('Estilo e tamanho copiados para todos os ' + wallFrames.length + ' quadros!');
 }
 
 

@@ -1292,6 +1292,9 @@ def criar_loja():
         )
         store_id = inserted_id(conn, cur_store)
 
+        # Garante que toda nova unidade comece com catalogo vazio persistido.
+        save_store_state(conn, store_id, 'catalog', default_store_state('catalog'))
+
         cur = conn.execute(
             '''
             INSERT INTO users (store_id, username, display_name, password_hash, role, is_active, created_at, updated_at)
@@ -1438,6 +1441,53 @@ def desativar_loja(store_id):
         )
 
     return jsonify({'ok': True, 'store_id': store_id})
+
+
+@app.route('/api/stores/<int:store_id>/purge', methods=['DELETE'])
+@login_required
+@admin_required
+def excluir_loja(store_id):
+    session_user_id = session.get('user_id')
+    session_store_id = current_store_id()
+    with get_db() as conn:
+        row = conn.execute(
+            '''
+            SELECT s.id
+            FROM stores s
+            WHERE s.id = ?
+            ''',
+            (store_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'Unidade nao encontrada.'}), 404
+
+        if store_id == session_store_id:
+            return jsonify({'error': 'Voce nao pode excluir a propria unidade.'}), 400
+
+        if conn.execute('SELECT 1 FROM users WHERE id = ? AND store_id = ?', (session_user_id, store_id)).fetchone():
+            return jsonify({'error': 'Voce nao pode excluir a propria unidade.'}), 400
+
+        total_admins = count_active_admins(conn)
+        admins_da_loja = conn.execute(
+            '''
+            SELECT COUNT(*) AS total
+            FROM users
+            WHERE store_id = ? AND role = ? AND is_active = ?
+            ''',
+            (store_id, 'admin', True)
+        ).fetchone()
+        admins_da_loja = int((admins_da_loja['total'] if admins_da_loja else 0) or 0)
+        if (total_admins - admins_da_loja) <= 0:
+            return jsonify({'error': 'O sistema precisa manter pelo menos um administrador ativo.'}), 400
+
+        conn.execute('DELETE FROM frames_cache WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM store_state WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM consultas WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM clientes WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM users WHERE store_id = ?', (store_id,))
+        conn.execute('DELETE FROM stores WHERE id = ?', (store_id,))
+
+    return jsonify({'ok': True, 'store_id': store_id, 'purged': True})
 
 
 @app.route('/api/admin/dashboard', methods=['GET'])
