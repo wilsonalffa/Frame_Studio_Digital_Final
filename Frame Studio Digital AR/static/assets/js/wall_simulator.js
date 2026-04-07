@@ -39,6 +39,9 @@ let wallResizeHandle = '';
 let wallResizeStartX = 0, wallResizeStartY = 0;
 let wallResizeStartFrame = null;
 let _wallRenderPending = false;
+let wallCompositionLocked = false;
+let wallGroupDragging = false;
+let wallGroupDragState = null;
 
 // Estrutura de um quadro:
 // { img, xP, yP, wCm, hCm, frameColor, frameW, ppOn, ppColor, ppSize, shadow, id }
@@ -56,6 +59,26 @@ function _wallGetTargetSizeCm() {
     w: Math.max(20, Math.min(300, isFinite(w) ? w : 80)),
     h: Math.max(20, Math.min(300, isFinite(h) ? h : 60)),
   };
+}
+
+function _wallUpdateCompositionLockBtn() {
+  const btn = document.getElementById('wallCompLockBtn');
+  if (!btn) return;
+  if (wallCompositionLocked) {
+    btn.style.background = 'rgba(178,34,34,0.88)';
+    btn.textContent = '🔒 Composição';
+    btn.title = 'Travada: move todos os quadros juntos';
+  } else {
+    btn.style.background = 'rgba(26,48,81,0.85)';
+    btn.textContent = '🔓 Composição';
+    btn.title = 'Destravada: quadros movem individualmente';
+  }
+}
+
+function toggleWallCompositionLock() {
+  wallCompositionLocked = !wallCompositionLocked;
+  _wallUpdateCompositionLockBtn();
+  toast(wallCompositionLocked ? 'Composição travada.' : 'Composição destravada.');
 }
 
 function _wallDefaultFrame(img) {
@@ -580,6 +603,16 @@ function wallInitDrag() {
     const hit = _wallHitTest(x, y, cW, cH, ppc);
     if (hit >= 0) {
       wallSelectFrame(hit);
+      if (wallCompositionLocked && wallFrames.length > 1) {
+        wallGroupDragging = true;
+        wallGroupDragState = {
+          startX: x,
+          startY: y,
+          frames: wallFrames.map((fr) => ({ xP: fr.xP, yP: fr.yP })),
+        };
+        cvs.style.cursor = 'grabbing';
+        return;
+      }
       const f = wallFrames[hit];
       const fx = f.xP / 100 * cW;
       const fy = f.yP / 100 * cH;
@@ -601,6 +634,21 @@ function wallInitDrag() {
     const { x, y } = _wallCanvasPos(e, cvs);
     const ppc = getPPC();
     const cW = cvs.width, cH = cvs.height;
+
+    if (wallGroupDragging && wallGroupDragState) {
+      e.preventDefault();
+      const dxP = ((x - wallGroupDragState.startX) / cW) * 100;
+      const dyP = ((y - wallGroupDragState.startY) / cH) * 100;
+      wallFrames.forEach((f, i) => {
+        const base = wallGroupDragState.frames[i];
+        if (!base) return;
+        f.xP = Math.max(2, Math.min(98, base.xP + dxP));
+        f.yP = Math.max(2, Math.min(98, base.yP + dyP));
+      });
+      _wallUpdatePanelFromSelected();
+      renderWall();
+      return;
+    }
 
     if (wallDragging && wallSelectedIdx >= 0) {
       e.preventDefault();
@@ -626,9 +674,11 @@ function wallInitDrag() {
   }
 
   function onUp() {
-    if (wallDragging || wallResizing) {
+    if (wallDragging || wallResizing || wallGroupDragging) {
       wallDragging = false;
       wallResizing = false;
+      wallGroupDragging = false;
+      wallGroupDragState = null;
       wallResizeStartFrame = null;
       _wallRenderPanel();
       _wallUpdatePanelFromSelected();
@@ -842,6 +892,9 @@ function wallCopyStyleToAll() {
   const src = wallFrames[wallSelectedIdx];
   if (!src) return toast('Selecione um quadro primeiro.');
   if (wallFrames.length < 2) return toast('Adicione ao menos 2 quadros.');
+
+  const isSplitComposition = Boolean(src._ffCompPanel === true && typeof ffSplitScaleWallCompositionFromFrame === 'function');
+
   wallFrames.forEach((f, i) => {
     if (i === wallSelectedIdx) return;
     f.frameColor = src.frameColor;
@@ -850,15 +903,32 @@ function wallCopyStyleToAll() {
     f.ppColor    = src.ppColor;
     f.ppSize     = src.ppSize;
     f.shadow     = src.shadow;
+
+    // Em quadro comum, copiar tamanho exato para todos.
+    // Em composição split, o tamanho proporcional é aplicado abaixo.
+    if (!isSplitComposition) {
+      f.wCm = src.wCm;
+      f.hCm = src.hCm;
+    }
   });
+
+  if (isSplitComposition) {
+    try {
+      ffSplitScaleWallCompositionFromFrame(src, { preserveCenter: true });
+    } catch (_) { }
+  }
+
+  _wallUpdatePanelFromSelected();
+  _wallRenderPanel();
   renderWall();
-  toast('Estilo copiado para todos os ' + wallFrames.length + ' quadros!');
+  toast('Estilo e tamanho aplicados para todos os ' + wallFrames.length + ' quadros!');
 }
 
 
 // ── Inicialização ─────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  _wallUpdateCompositionLockBtn();
   // Inicializar drag após canvas estar visível
   const obs = new MutationObserver(() => {
     const cvs = document.getElementById('wallCanvas');
