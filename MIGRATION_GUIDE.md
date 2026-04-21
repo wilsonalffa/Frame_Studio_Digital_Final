@@ -2,6 +2,32 @@
 
 ## Passos rápidos
 
+### 0.0. Opcional: preparar franquias sem abrir acesso agora
+- No Supabase SQL Editor, execute o arquivo abaixo se quiser deixar a base pronta
+	para Auth + multiunidade no futuro, mantendo o modo backend-only hoje:
+```sql
+-- arquivo: sql/supabase_franchise_prep.sql
+```
+- Esse modo adiciona `auth_user_id`, cria as funcoes auxiliares e mantem o banco
+	fechado para `anon` e `authenticated`.
+
+### 0. Aplicar hardening de seguranca (obrigatorio)
+- No Supabase SQL Editor, execute o arquivo abaixo:
+```sql
+-- arquivo: sql/supabase_rls_lockdown.sql
+```
+- Isso corrige alertas como `rls_disabled_in_public` e bloqueia acesso publico indevido.
+
+### 0.1. Opcional para franquia: RLS multiunidade por loja
+- Se futuramente o frontend usar Supabase Auth + acesso direto ao banco, execute:
+```sql
+-- arquivo: sql/supabase_rls_multitenant.sql
+```
+- Esse modo permite role `authenticated` com isolamento por `store_id`.
+- Nao execute junto com o modo de bloqueio total sem revisar impacto de acesso.
+- Se quiser apenas preparar a estrutura e deixar o acesso fechado por enquanto,
+  prefira `sql/supabase_franchise_prep.sql`.
+
 ### 1. Pegar credentials do Supabase
 - Entre em https://supabase.com, abra seu projeto
 - Settings → Database → Connection String

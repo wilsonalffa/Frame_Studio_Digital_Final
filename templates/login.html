@@ -182,7 +182,7 @@ body{
   <div class="error-msg">⚠️ {{ error }}</div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+  <form method="POST" action="{{ url_for('main.login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}"">
     <div class="form-group">
       <label for="username">Login da unidade</label>
       <input type="text" id="username" name="username" placeholder="Digite o login da unidade"

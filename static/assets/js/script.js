@@ -48,6 +48,27 @@ let gridCols=2, gridRows=2;
 let partWidths=[1], partHeights=[1];
 let totalWcm=null, totalHcm=null;
 let enhOrigCanvas=null, enhScale=1, enhFilter='none';
+const QI_PRESETS=[
+  { key:'10x15', w:10, h:15 },
+  { key:'13x18', w:13, h:18 },
+  { key:'21x30', w:21, h:30 },
+  { key:'30x40', w:30, h:40 },
+  { key:'50x70', w:50, h:70 },
+  { key:'60x90', w:60, h:90 },
+];
+let qiFitMode='cover';
+let qiSizeLocked=true;
+let qiAspectRatio=4/3;
+let qiImageScale=1;
+let qiImageScaleX=1;
+let qiImageScaleY=1;
+let qiImageOffsetX=0;
+let qiImageOffsetY=0;
+let qiSelectionActive=false;
+let qiDimensionSync=false;
+let qiRenderMetrics=null;
+let qiDragState=null;
+let qiMatColor='#FFFFFF';
 
 
 // ─────────────────────────────────────────────────────────
@@ -124,6 +145,7 @@ async function _saveAs(blob, suggestedName, mimeType) {
 function switchTab(id,btn){
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.getElementById('tab-'+id).classList.add('active');
+  if(id==='quadros'&&typeof qImg!=='undefined'&&qImg) requestAnimationFrame(()=>qiRenderDesigner());
   // Sync desktop nav
   document.querySelectorAll('[data-nav]').forEach(b=>b.classList.toggle('active',b.dataset.nav===id));
   // Sync mobile nav
@@ -309,9 +331,442 @@ function showQ(){
   });
 
   document.getElementById('qResults').style.display='block';
+  const qiCard=document.getElementById('qiDesignerCard');
+  if(qiCard) qiCard.style.display='block';
   document.getElementById('enhCard').style.display='block';
+  qiInitFromQImage();
   initEnhFromQImg();
   suggestFileNameFromImage(img);
+}
+
+function _qiRound(value, decimals=1){
+  const factor=10**decimals;
+  return Math.round((Number(value)||0)*factor)/factor;
+}
+
+function _qiFormatInput(value){
+  const rounded=_qiRound(value,1);
+  return Number.isInteger(rounded)?String(rounded):rounded.toFixed(1);
+}
+
+function _qiCurrentSize(){
+  const w=parseFloat(document.getElementById('qiW')?.value);
+  const h=parseFloat(document.getElementById('qiH')?.value);
+  return { w, h };
+}
+
+function _qiValidSize(){
+  const wEl=document.getElementById('qiW');
+  const hEl=document.getElementById('qiH');
+  if(!wEl||!hEl) return false;
+  const okW=validateCmInput(wEl,1,500);
+  const okH=validateCmInput(hEl,1,500);
+  return okW&&okH&&validatePositiveFrameValue(wEl.value)&&validatePositiveFrameValue(hEl.value);
+}
+
+function qiUpdatePresetState(){
+  const { w, h }=_qiCurrentSize();
+  document.querySelectorAll('[data-qi-preset]').forEach((btn)=>{
+    const preset=QI_PRESETS.find(item=>item.key===btn.dataset.qiPreset);
+    const matched=Boolean(preset&&Math.abs((w||0)-preset.w)<0.05&&Math.abs((h||0)-preset.h)<0.05);
+    btn.classList.toggle('active',matched);
+  });
+}
+
+function qiUpdateMeta(){
+  const lockBtn=document.getElementById('qiLockBtn');
+  const lockIcon=document.getElementById('qiLockIcon');
+  if(lockBtn){
+    lockBtn.classList.toggle('active',qiSizeLocked);
+    lockBtn.setAttribute('aria-pressed',qiSizeLocked?'true':'false');
+    lockBtn.title=qiSizeLocked?'Proporcao travada':'Proporcao livre';
+  }
+  if(lockIcon) lockIcon.textContent=qiSizeLocked?'🔒':'🔓';
+  const info=document.getElementById('qiInfo');
+  const { w, h }=_qiCurrentSize();
+  if(info&&validatePositiveFrameValue(w)&&validatePositiveFrameValue(h)){
+    const parts=[`Area final: ${_qiRound(w)} x ${_qiRound(h)} cm`];
+    parts.push(`Escala H: ${Math.round(qiImageScaleX*100)}% · V: ${Math.round(qiImageScaleY*100)}%`);
+    parts.push(qiFitMode==='cover'?'Modo: preencher':'Modo: encaixar');
+    parts.push(`Fundo: ${qiMatColor.toUpperCase()}`);
+    parts.push('Interacao: alcas e controles H/V');
+    info.textContent=parts.join('  ·  ');
+  }
+}
+
+function qiSetMatColor(color, idx){
+  qiMatColor=color;
+  const picker=document.getElementById('qiMatColorPicker');
+  if(picker&&picker.value!==color) picker.value=color;
+  for(let i=0;i<5;i++){
+    const el=document.getElementById('qiMatSw'+i);
+    if(el) el.classList.toggle('active', i===idx && idx>=0);
+  }
+  qiRenderDesigner();
+}
+
+function qiBuildExportCanvas(){
+  if(!qImg||!_qiValidSize()) return null;
+  const { w: wCm, h: hCm }=_qiCurrentSize();
+  const out=document.createElement('canvas');
+  const dpi=300;
+  const maxPx=10000;
+  let outW=Math.max(1,Math.round((wCm/2.54)*dpi));
+  let outH=Math.max(1,Math.round((hCm/2.54)*dpi));
+  const maxSide=Math.max(outW,outH);
+  if(maxSide>maxPx){
+    const ratio=maxPx/maxSide;
+    outW=Math.max(1,Math.round(outW*ratio));
+    outH=Math.max(1,Math.round(outH*ratio));
+  }
+  out.width=outW;
+  out.height=outH;
+  const ctx=out.getContext('2d');
+  ctx.fillStyle=qiMatColor;
+  ctx.fillRect(0,0,outW,outH);
+
+  const srcW=qImg.img.naturalWidth||qImg.img.width;
+  const srcH=qImg.img.naturalHeight||qImg.img.height;
+  const baseScale=(qiFitMode==='cover')?Math.max(outW/srcW,outH/srcH):Math.min(outW/srcW,outH/srcH);
+  const drawW=Math.max(1,srcW*baseScale*qiImageScaleX);
+  const drawH=Math.max(1,srcH*baseScale*qiImageScaleY);
+
+  const drawX=(outW-drawW)/2;
+  const drawY=(outH-drawH)/2;
+  ctx.drawImage(qImg.img,drawX,drawY,drawW,drawH);
+  return out;
+}
+
+function qiSaveImage(){
+  if(!qImg) return toast('Carregue uma imagem primeiro.');
+  const out=qiBuildExportCanvas();
+  if(!out) return toast('Defina largura e altura válidas para salvar.');
+  askFileName('enquadrada', (finalName) => {
+    out.toBlob((blob)=>{
+      if(!blob){ toast('Falha ao gerar a imagem.'); return; }
+      _saveAs(blob, finalName, 'image/jpeg').then(()=>toast('Imagem salva!'));
+    }, 'image/jpeg', 0.95);
+  });
+}
+
+function _qiSyncLegacyScale(){
+  qiImageScale=(qiImageScaleX+qiImageScaleY)/2;
+}
+
+function qiAdjustScaleAxis(axis,value){
+  const parsed=parseFloat(value);
+  if(!Number.isFinite(parsed)) return;
+  const scale=Math.max(35,Math.min(400,parsed))/100;
+  if(axis==='x') qiImageScaleX=scale;
+  else qiImageScaleY=scale;
+  _qiSyncLegacyScale();
+  qiRenderDesigner();
+}
+
+function qiUpdateScaleAxisControls(){
+  const xRange=document.getElementById('qiScaleX');
+  const yRange=document.getElementById('qiScaleY');
+  const xVal=document.getElementById('qiScaleXVal');
+  const yVal=document.getElementById('qiScaleYVal');
+  if(!xRange||!yRange||!xVal||!yVal) return;
+  xRange.value=String(Math.round(qiImageScaleX*100));
+  yRange.value=String(Math.round(qiImageScaleY*100));
+  xVal.textContent=Math.round(qiImageScaleX*100)+'%';
+  yVal.textContent=Math.round(qiImageScaleY*100)+'%';
+}
+
+function qiSetPreset(w,h){
+  const wEl=document.getElementById('qiW');
+  const hEl=document.getElementById('qiH');
+  if(!wEl||!hEl) return;
+  wEl.value=_qiFormatInput(w);
+  hEl.value=_qiFormatInput(h);
+  qiAspectRatio=w/h;
+  qiUpdatePresetState();
+  qiApplyToCustomCheck(false);
+  qiRenderDesigner();
+}
+
+function qiToggleSizeLock(force){
+  const { w, h }=_qiCurrentSize();
+  qiSizeLocked=typeof force==='boolean'?force:!qiSizeLocked;
+  if(qiSizeLocked&&validatePositiveFrameValue(w)&&validatePositiveFrameValue(h)) qiAspectRatio=w/h;
+  qiUpdateMeta();
+}
+
+function qiHandleDimensionInput(changed){
+  const wEl=document.getElementById('qiW');
+  const hEl=document.getElementById('qiH');
+  if(!wEl||!hEl) return;
+  const currentEl=changed==='h'?hEl:wEl;
+  validateCmInput(currentEl,1,500);
+  const w=parseFloat(wEl.value);
+  const h=parseFloat(hEl.value);
+
+  if(qiSizeLocked&&!qiDimensionSync&&qiAspectRatio>0){
+    qiDimensionSync=true;
+    if(changed==='w'&&validatePositiveFrameValue(w)) hEl.value=_qiFormatInput(w/qiAspectRatio);
+    if(changed==='h'&&validatePositiveFrameValue(h)) wEl.value=_qiFormatInput(h*qiAspectRatio);
+    qiDimensionSync=false;
+  }
+
+  if(_qiValidSize()&&!qiSizeLocked){
+    qiAspectRatio=parseFloat(wEl.value)/parseFloat(hEl.value);
+  }
+  qiUpdatePresetState();
+  qiApplyToCustomCheck(false);
+  qiRenderDesigner();
+}
+
+function qiSetFitMode(mode,btn=null){
+  qiFitMode=mode==='contain'?'contain':'cover';
+  document.querySelectorAll('[data-qi-fit]').forEach((item)=>{
+    item.classList.toggle('active',item.dataset.qiFit===qiFitMode);
+  });
+  if(btn) btn.classList.add('active');
+  qiRenderDesigner();
+}
+
+function qiResetTransform(){
+  qiImageScale=1;
+  qiImageScaleX=1;
+  qiImageScaleY=1;
+  qiImageOffsetX=0;
+  qiImageOffsetY=0;
+  qiSelectionActive=true;
+  qiRenderDesigner();
+}
+
+function qiApplyToCustomCheck(runCheck=true){
+  const { w, h }=_qiCurrentSize();
+  const cW=document.getElementById('cW');
+  const cH=document.getElementById('cH');
+  if(cW&&validatePositiveFrameValue(w)) cW.value=_qiFormatInput(w);
+  if(cH&&validatePositiveFrameValue(h)) cH.value=_qiFormatInput(h);
+  customW=validatePositiveFrameValue(w)?w:null;
+  customH=validatePositiveFrameValue(h)?h:null;
+  if(runCheck&&customW&&customH&&qImg) checkCustom();
+}
+
+function qiInitFromQImage(){
+  if(!qImg) return;
+  const wEl=document.getElementById('qiW');
+  const hEl=document.getElementById('qiH');
+  if(!wEl||!hEl) return;
+  const[mw,mh]=maxPrintCm(qImg.w,qImg.h);
+  const initialW=customW||mw;
+  const initialH=customH||mh;
+  wEl.value=_qiFormatInput(initialW);
+  hEl.value=_qiFormatInput(initialH);
+  qiAspectRatio=Math.max(0.1,initialW/Math.max(0.1,initialH));
+  qiSizeLocked=true;
+  qiFitMode='cover';
+  qiImageScale=1;
+  qiImageScaleX=1;
+  qiImageScaleY=1;
+  qiImageOffsetX=0;
+  qiImageOffsetY=0;
+  qiMatColor='#FFFFFF';
+  qiSelectionActive=true;
+  qiDragState=null;
+  qiUpdatePresetState();
+  qiSetMatColor('#FFFFFF',0);
+  qiApplyToCustomCheck(false);
+  qiRenderDesigner();
+}
+
+function _qiPointerPosition(evt){
+  const canvas=document.getElementById('qiCanvas');
+  if(!canvas) return { x:0, y:0 };
+  const rect=canvas.getBoundingClientRect();
+  return { x:evt.clientX-rect.left, y:evt.clientY-rect.top };
+}
+
+function _qiHitHandle(pos, metrics){
+  if(!metrics) return null;
+  const hs=metrics.handleSize;
+  const handles=[
+    { type:'nw', x:metrics.artX, y:metrics.artY },
+    { type:'n', x:metrics.artX+metrics.artW/2, y:metrics.artY },
+    { type:'ne', x:metrics.artX+metrics.artW, y:metrics.artY },
+    { type:'e', x:metrics.artX+metrics.artW, y:metrics.artY+metrics.artH/2 },
+    { type:'se', x:metrics.artX+metrics.artW, y:metrics.artY+metrics.artH },
+    { type:'s', x:metrics.artX+metrics.artW/2, y:metrics.artY+metrics.artH },
+    { type:'sw', x:metrics.artX, y:metrics.artY+metrics.artH },
+    { type:'w', x:metrics.artX, y:metrics.artY+metrics.artH/2 },
+  ];
+  return handles.find((h)=>Math.abs(pos.x-h.x)<=hs&&Math.abs(pos.y-h.y)<=hs) || null;
+}
+
+function _qiCursorForHandle(type){
+  if(type==='n'||type==='s') return 'ns-resize';
+  if(type==='e'||type==='w') return 'ew-resize';
+  if(type==='ne'||type==='sw') return 'nesw-resize';
+  return 'nwse-resize';
+}
+
+function initQIDesignerInteractions(){
+  const canvas=document.getElementById('qiCanvas');
+  const stage=document.getElementById('qiStage');
+  if(!canvas||!stage||canvas.dataset.qiBound==='1') return;
+  canvas.dataset.qiBound='1';
+
+  canvas.addEventListener('pointerdown',(evt)=>{
+    if(!qImg||!qiRenderMetrics) return;
+    const pos=_qiPointerPosition(evt);
+    const handle=_qiHitHandle(pos,qiRenderMetrics);
+    const insideArt=pos.x>=qiRenderMetrics.artX&&pos.x<=qiRenderMetrics.artX+qiRenderMetrics.artW&&pos.y>=qiRenderMetrics.artY&&pos.y<=qiRenderMetrics.artY+qiRenderMetrics.artH;
+    if(!handle&&!insideArt){
+      qiSelectionActive=false;
+      qiRenderDesigner();
+      return;
+    }
+
+    qiSelectionActive=true;
+    if(handle){
+      qiDragState={
+        mode:'resize',
+        pointerId:evt.pointerId,
+        handleType:handle.type,
+        startX:evt.clientX,
+        startY:evt.clientY,
+        startScaleX:qiImageScaleX,
+        startScaleY:qiImageScaleY,
+      };
+      canvas.style.cursor=_qiCursorForHandle(handle.type);
+      if(canvas.setPointerCapture) canvas.setPointerCapture(evt.pointerId);
+      evt.preventDefault();
+      return;
+    }
+
+    canvas.style.cursor='default';
+  });
+
+  canvas.addEventListener('pointermove',(evt)=>{
+    if(!qImg||!qiRenderMetrics) return;
+    const pos=_qiPointerPosition(evt);
+
+    if(!qiDragState){
+      const handle=_qiHitHandle(pos,qiRenderMetrics);
+      const insideArt=pos.x>=qiRenderMetrics.artX&&pos.x<=qiRenderMetrics.artX+qiRenderMetrics.artW&&pos.y>=qiRenderMetrics.artY&&pos.y<=qiRenderMetrics.artY+qiRenderMetrics.artH;
+      if(handle) canvas.style.cursor=_qiCursorForHandle(handle.type);
+      else if(insideArt) canvas.style.cursor='default';
+      else canvas.style.cursor='default';
+      return;
+    }
+
+    if(qiDragState.pointerId!==evt.pointerId) return;
+    if(qiDragState.mode==='resize'){
+      const dx=evt.clientX-qiDragState.startX;
+      const dy=evt.clientY-qiDragState.startY;
+      const type=qiDragState.handleType||'';
+
+      let nextScaleX=qiDragState.startScaleX;
+      let nextScaleY=qiDragState.startScaleY;
+      if(type.includes('e')) nextScaleX=qiDragState.startScaleX*(1+dx/220);
+      if(type.includes('w')) nextScaleX=qiDragState.startScaleX*(1-dx/220);
+      if(type.includes('s')) nextScaleY=qiDragState.startScaleY*(1+dy/220);
+      if(type.includes('n')) nextScaleY=qiDragState.startScaleY*(1-dy/220);
+
+      qiImageScaleX=Math.max(0.35,Math.min(4,nextScaleX));
+      qiImageScaleY=Math.max(0.35,Math.min(4,nextScaleY));
+      _qiSyncLegacyScale();
+      qiRenderDesigner();
+    }
+  });
+
+  const finish=(evt)=>{
+    if(!qiDragState||!evt||qiDragState.pointerId!==evt.pointerId) return;
+    qiDragState=null;
+    canvas.style.cursor='default';
+  };
+  canvas.addEventListener('pointerup',finish);
+  canvas.addEventListener('pointercancel',finish);
+  canvas.addEventListener('pointerleave',()=>{
+    if(!qiDragState) canvas.style.cursor='default';
+  });
+}
+
+function qiRenderDesigner(){
+  const canvas=document.getElementById('qiCanvas');
+  const stage=document.getElementById('qiStage');
+  if(!canvas||!stage||!qImg) return;
+  if(!_qiValidSize()){
+    const info=document.getElementById('qiInfo');
+    if(info) info.textContent='Defina largura e altura validas em cm para continuar.';
+    return;
+  }
+
+  const w=stage.clientWidth-24;
+  const h=stage.clientHeight-24;
+  if(w<20||h<20) return;
+  canvas.width=w;
+  canvas.height=h;
+  const ctx=canvas.getContext('2d');
+  const { w: wCm, h: hCm }=_qiCurrentSize();
+
+  const artScale=Math.min((w-80)/wCm,(h-80)/hCm);
+  const artW=Math.max(70,wCm*artScale);
+  const artH=Math.max(70,hCm*artScale);
+  const artX=(w-artW)/2;
+  const artY=(h-artH)/2;
+
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle='#DDE7F4';
+  ctx.fillRect(0,0,w,h);
+
+  ctx.fillStyle=qiMatColor;
+  ctx.fillRect(artX,artY,artW,artH);
+
+  const srcW=qImg.img.naturalWidth||qImg.img.width;
+  const srcH=qImg.img.naturalHeight||qImg.img.height;
+  const baseScale=(qiFitMode==='cover')?Math.max(artW/srcW,artH/srcH):Math.min(artW/srcW,artH/srcH);
+  const drawW=Math.max(1,srcW*baseScale*qiImageScaleX);
+  const drawH=Math.max(1,srcH*baseScale*qiImageScaleY);
+
+  qiRenderMetrics={ artX, artY, artW, artH, drawW, drawH, handleSize:8 };
+  qiUpdateScaleAxisControls();
+
+  const drawX=artX+((artW-drawW)/2);
+  const drawY=artY+((artH-drawH)/2);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(artX,artY,artW,artH);
+  ctx.clip();
+  ctx.drawImage(qImg.img,drawX,drawY,drawW,drawH);
+  ctx.restore();
+
+  ctx.strokeStyle='rgba(26,48,81,0.35)';
+  ctx.lineWidth=1;
+  ctx.strokeRect(artX+0.5,artY+0.5,artW-1,artH-1);
+
+  if(qiSelectionActive){
+    ctx.strokeStyle='#2F5E99';
+    ctx.lineWidth=2;
+    ctx.strokeRect(artX+1,artY+1,artW-2,artH-2);
+
+    const handles=[
+      [artX,artY],
+      [artX+artW/2,artY],
+      [artX+artW,artY],
+      [artX+artW,artY+artH/2],
+      [artX+artW,artY+artH],
+      [artX+artW/2,artY+artH],
+      [artX,artY+artH],
+      [artX,artY+artH/2],
+    ];
+    ctx.fillStyle='#FFFFFF';
+    ctx.strokeStyle='#2F5E99';
+    handles.forEach(([hx,hy])=>{
+      ctx.beginPath();
+      ctx.rect(hx-5,hy-5,10,10);
+      ctx.fill();
+      ctx.stroke();
+    });
+  }
+
+  qiUpdateMeta();
 }
 
 function checkCustom(){
@@ -380,9 +835,20 @@ function closePreviewModal(){
 function resetQ(){
   qImg=null;
   customW=null; customH=null;
+  qiImageScale=1;
+  qiImageScaleX=1;
+  qiImageScaleY=1;
+  qiImageOffsetX=0;
+  qiImageOffsetY=0;
+  qiMatColor='#FFFFFF';
+  qiSelectionActive=false;
+  qiRenderMetrics=null;
+  qiDragState=null;
   document.getElementById('qThumb').style.display='none';
   document.getElementById('qResults').style.display='none';
   document.getElementById('qFile').value='';
+  const qiCard=document.getElementById('qiDesignerCard');
+  if(qiCard) qiCard.style.display='none';
   document.getElementById('cRes').style.display='none';
   document.getElementById('cPreview').style.display='none';
   document.getElementById('enhCard').style.display='none';
@@ -1957,11 +2423,250 @@ let sqImg=null;
 let sqFrameColor='#3C2F1E';
 let sqPpColor='#FFFFFF';
 let sqBgColor='#E8EDF2';
+let sqMarginColor='#FFFFFF';
+let sqSizeLocked=true;
+let sqAspectRatio=4/3;
+let sqImageScale=1;
+let sqImageOffsetX=0;
+let sqImageOffsetY=0;
+let sqFitMode='contain';
+let sqRenderMetrics=null;
+let sqDragState=null;
+let sqDimensionSync=false;
 let _ffSplitComposicaoAtiva=false;
 let _ffSplitComposicaoMeta=null;
 let _ffSplitReplayImg=null;
 
+const SQ_PRESETS=[
+  { key:'10x15', label:'10 × 15 cm', w:10, h:15 },
+  { key:'13x18', label:'13 × 18 cm', w:13, h:18 },
+  { key:'21x30', label:'21 × 30 cm', w:21, h:30 },
+  { key:'30x40', label:'30 × 40 cm', w:30, h:40 },
+  { key:'50x70', label:'50 × 70 cm', w:50, h:70 },
+  { key:'60x90', label:'60 × 90 cm', w:60, h:90 },
+];
+
 function loadSQ(e){ loadImgFile(e.target.files[0],'sq'); }
+
+function _sqRound(value, decimals=1){
+  const factor=10**decimals;
+  return Math.round((Number(value)||0)*factor)/factor;
+}
+
+function _sqFormatInput(value){
+  const rounded=_sqRound(value,1);
+  return Number.isInteger(rounded)?String(rounded):rounded.toFixed(1);
+}
+
+function validatePositiveFrameValue(value){
+  const num=parseFloat(value);
+  return Number.isFinite(num) && num>0;
+}
+
+function _sqCurrentSize(){
+  const w=parseFloat(document.getElementById('sqW')?.value);
+  const h=parseFloat(document.getElementById('sqH')?.value);
+  return { w, h };
+}
+
+function _sqClampOffsets(metrics){
+  if(!metrics) return;
+  const limitX=Math.abs((metrics.artWpx-metrics.drawW)/2);
+  const limitY=Math.abs((metrics.artHpx-metrics.drawH)/2);
+  sqImageOffsetX=Math.max(-limitX,Math.min(limitX,sqImageOffsetX));
+  sqImageOffsetY=Math.max(-limitY,Math.min(limitY,sqImageOffsetY));
+}
+
+function updateSQSizeMeta(){
+  const { w, h }=_sqCurrentSize();
+  const lockBtn=document.getElementById('sqLockBtn');
+  const lockIcon=document.getElementById('sqLockIcon');
+  const ratioLabel=document.getElementById('sqRatioLabel');
+  if(lockBtn){
+    lockBtn.classList.toggle('active',sqSizeLocked);
+    lockBtn.setAttribute('aria-pressed', sqSizeLocked ? 'true' : 'false');
+    lockBtn.title=sqSizeLocked ? 'Proporção travada' : 'Proporção livre';
+  }
+  if(lockIcon) lockIcon.textContent=sqSizeLocked ? '🔒' : '🔓';
+  if(validatePositiveFrameValue(w) && validatePositiveFrameValue(h)){
+    const gcd=(a,b)=>b?gcd(b,a%b):a;
+    const scaledW=Math.round(w*10);
+    const scaledH=Math.round(h*10);
+    const div=gcd(scaledW,scaledH) || 1;
+    if(ratioLabel) ratioLabel.textContent=`${scaledW/div}:${scaledH/div}`;
+  } else if(ratioLabel){
+    ratioLabel.textContent='-';
+  }
+}
+
+function updateSQPresetState(){
+  const { w, h }=_sqCurrentSize();
+  const presetLabel=document.getElementById('sqPresetLabel');
+  let matchedLabel='Livre';
+  document.querySelectorAll('[data-sq-preset]').forEach((btn)=>{
+    const preset=SQ_PRESETS.find(item=>item.key===btn.dataset.sqPreset);
+    const matched=Boolean(preset && Math.abs((w||0)-preset.w)<0.05 && Math.abs((h||0)-preset.h)<0.05);
+    btn.classList.toggle('active', matched);
+    if(matched) matchedLabel=preset.label;
+  });
+  if(presetLabel) presetLabel.textContent=matchedLabel;
+}
+
+function validateSQSizeInputs(){
+  const wEl=document.getElementById('sqW');
+  const hEl=document.getElementById('sqH');
+  if(!wEl || !hEl) return false;
+  const okW=validateCmInput(wEl,0.1,300);
+  const okH=validateCmInput(hEl,0.1,300);
+  return okW && okH && validatePositiveFrameValue(wEl.value) && validatePositiveFrameValue(hEl.value);
+}
+
+function toggleSQSizeLock(force){
+  const { w, h }=_sqCurrentSize();
+  sqSizeLocked=typeof force==='boolean' ? force : !sqSizeLocked;
+  if(sqSizeLocked && validatePositiveFrameValue(w) && validatePositiveFrameValue(h)){
+    sqAspectRatio=w/h;
+  }
+  updateSQSizeMeta();
+}
+
+function handleSQDimensionInput(changed){
+  const wEl=document.getElementById('sqW');
+  const hEl=document.getElementById('sqH');
+  if(!wEl || !hEl) return;
+  const currentEl=changed==='h' ? hEl : wEl;
+  validateCmInput(currentEl,0.1,300);
+  const w=parseFloat(wEl.value);
+  const h=parseFloat(hEl.value);
+
+  if(sqSizeLocked && !sqDimensionSync && sqAspectRatio>0){
+    sqDimensionSync=true;
+    if(changed==='w' && validatePositiveFrameValue(w)){
+      hEl.value=_sqFormatInput(w/sqAspectRatio);
+    }
+    if(changed==='h' && validatePositiveFrameValue(h)){
+      wEl.value=_sqFormatInput(h*sqAspectRatio);
+    }
+    sqDimensionSync=false;
+  }
+
+  const valid=validateSQSizeInputs();
+  if(valid && !sqSizeLocked){
+    sqAspectRatio=parseFloat(wEl.value)/parseFloat(hEl.value);
+  }
+  updateSQSizeMeta();
+  updateSQPresetState();
+  renderFrame();
+}
+
+function setSQPreset(w,h,label='Livre'){
+  const wEl=document.getElementById('sqW');
+  const hEl=document.getElementById('sqH');
+  if(!wEl || !hEl) return;
+  wEl.value=_sqFormatInput(w);
+  hEl.value=_sqFormatInput(h);
+  sqAspectRatio=w/h;
+  validateSQSizeInputs();
+  updateSQSizeMeta();
+  updateSQPresetState();
+  const presetLabel=document.getElementById('sqPresetLabel');
+  if(presetLabel) presetLabel.textContent=label;
+  renderFrame();
+}
+
+function setSQFitMode(mode,btn=null){
+  sqFitMode=mode==='cover' ? 'cover' : 'contain';
+  document.querySelectorAll('[data-sq-fit]').forEach((item)=>{
+    item.classList.toggle('active', item.dataset.sqFit===sqFitMode);
+  });
+  if(btn) btn.classList.add('active');
+  renderFrame();
+}
+
+function setSQImageScale(value){
+  const slider=document.getElementById('sqImageScale');
+  const label=document.getElementById('sqImageScaleL');
+  const numeric=Math.max(40,Math.min(180,parseFloat(value)||100));
+  sqImageScale=numeric/100;
+  if(slider && slider.value!==String(Math.round(numeric))) slider.value=String(Math.round(numeric));
+  if(label) label.textContent=`${Math.round(numeric)}%`;
+  renderFrame();
+}
+
+function resetSQImagePlacement(){
+  sqImageOffsetX=0;
+  sqImageOffsetY=0;
+  setSQImageScale(100);
+}
+
+function setSQMarginColor(color,idx){
+  sqMarginColor=color;
+  const picker=document.getElementById('sqMarginColorPicker');
+  if(picker) picker.value=color;
+  for(let i=0;i<5;i++){
+    const el=document.getElementById('sqMarginSw'+i);
+    if(el) el.classList.toggle('active',i===idx);
+  }
+  renderFrame();
+}
+
+function clearSQMarginActive(){
+  for(let i=0;i<5;i++){
+    const el=document.getElementById('sqMarginSw'+i);
+    if(el) el.classList.remove('active');
+  }
+}
+
+function buildSQFramePayload(){
+  if(!validateSQSizeInputs()) throw new Error('Informe largura e altura válidas em cm.');
+  const metrics=sqRenderMetrics || { artWpx:1, artHpx:1 };
+  const widthCm=parseFloat(document.getElementById('sqW').value);
+  const heightCm=parseFloat(document.getElementById('sqH').value);
+  const frameWidthCm=parseFloat(document.getElementById('sqFrameW').value||0) || 0;
+  const passepartoutEnabled=Boolean(document.getElementById('sqPpEnabled').checked);
+  const passepartoutSizeCm=passepartoutEnabled ? (parseFloat(document.getElementById('sqPpSize').value||0) || 0) : 0;
+  return {
+    widthCm: parseFloat(widthCm.toFixed(2)),
+    heightCm: parseFloat(heightCm.toFixed(2)),
+    unit: 'cm',
+    ratioLocked: Boolean(sqSizeLocked),
+    fitMode: sqFitMode,
+    frameWidthCm: parseFloat(frameWidthCm.toFixed(2)),
+    passepartoutEnabled,
+    passepartoutSizeCm: parseFloat(passepartoutSizeCm.toFixed(2)),
+    marginColor: sqMarginColor,
+    imageScale: parseFloat(sqImageScale.toFixed(3)),
+    imageOffsetX: parseFloat((sqImageOffsetX/Math.max(1,metrics.artWpx)).toFixed(4)),
+    imageOffsetY: parseFloat((sqImageOffsetY/Math.max(1,metrics.artHpx)).toFixed(4)),
+  };
+}
+
+async function postSQFramePayload(url='/api/frame-spec'){
+  const payload=buildSQFramePayload();
+  return _ffApi(url, {
+    method:'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+function _sqPointerPosition(evt){
+  const canvas=document.getElementById('frameCanvas');
+  if(!canvas) return { x:0, y:0 };
+  const rect=canvas.getBoundingClientRect();
+  return {
+    x:evt.clientX-rect.left,
+    y:evt.clientY-rect.top,
+  };
+}
+
+function initSQDesignerInteractions(){
+  updateSQSizeMeta();
+  updateSQPresetState();
+}
+
+function _sqCanDragImage(){
+  return Boolean(sqImg && sqRenderMetrics && !(_ffSplitComposicaoAtiva && _ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1));
+}
 
 // Override the img load dispatch to handle sq
 function _dispatchImg(d, type){
@@ -1981,13 +2686,30 @@ function showSQ(){
   document.getElementById('sqResults').style.display='block';
   // Pré-preencher dimensões com tamanho máximo recomendado
   const[mw,mh]=maxPrintCm(sqImg.w,sqImg.h);
-  document.getElementById('sqW').value=mw;
-  document.getElementById('sqH').value=mh;
+  const useW=validatePositiveFrameValue(customW)?customW:mw;
+  const useH=validatePositiveFrameValue(customH)?customH:mh;
+  const sqWEl=document.getElementById('sqW');
+  const sqHEl=document.getElementById('sqH');
+  if(sqWEl) sqWEl.value=_sqFormatInput(useW);
+  if(sqHEl) sqHEl.value=_sqFormatInput(useH);
+  sqAspectRatio=useW/useH;
+  sqImageOffsetX=0;
+  sqImageOffsetY=0;
+  sqFitMode=(typeof qiFitMode!=='undefined'&&qiFitMode==='contain')?'contain':'cover';
+  sqImageScale=(typeof qiImageScale==='number'&&Number.isFinite(qiImageScale))?qiImageScale:1;
+  sqMarginColor=(typeof qiMatColor==='string'&&qiMatColor)?qiMatColor:'#FFFFFF';
+  toggleSQSizeLock(true);
+  setSQImageScale(Math.max(40,Math.min(180,Math.round(sqImageScale*100))));
+  setSQFitMode(sqFitMode);
+  updateSQPresetState();
   requestAnimationFrame(()=>renderFrame());
 }
 
 function resetSQ(){
   sqImg=null;
+  sqRenderMetrics=null;
+  sqImageOffsetX=0;
+  sqImageOffsetY=0;
   _ffSplitComposicaoAtiva=false;
   _ffSplitComposicaoMeta=null;
   _ffSplitReplayImg=null;
@@ -2362,11 +3084,75 @@ function renderFrame(){
   const stage=document.getElementById('frameStage');
   const stageW=stage.offsetWidth-28||600;
 
-  const wCm=parseFloat(document.getElementById('sqW').value)||80;
-  const hCm=parseFloat(document.getElementById('sqH').value)||60;
+  const wCm=parseFloat(document.getElementById('sqW').value);
+  const hCm=parseFloat(document.getElementById('sqH').value);
   const frameWcm=parseFloat(document.getElementById('sqFrameW').value)||0;
   const ppOn=document.getElementById('sqPpEnabled').checked;
   const ppCm=ppOn?(parseFloat(document.getElementById('sqPpSize').value)||3):0;
+  const info=document.getElementById('sqSizeInfo');
+
+  if(!validatePositiveFrameValue(wCm) || !validatePositiveFrameValue(hCm)){
+    sqRenderMetrics=null;
+    stage.classList.remove('can-drag','is-dragging');
+    if(info) info.textContent='Defina largura e altura válidas em cm para montar o quadro.';
+    return;
+  }
+
+  const splitAtivo=Boolean(_ffSplitComposicaoAtiva && _ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1);
+  if(splitAtivo){
+    sqRenderMetrics=null;
+    stage.classList.remove('can-drag','is-dragging');
+    const meta=_ffSplitComposicaoMeta;
+    const srcImg=_ffSplitReplayImg || ((cImg&&cImg.img)?cImg.img:sqImg.img);
+    const imgW=srcImg.naturalWidth||srcImg.width;
+    const imgH=srcImg.naturalHeight||srcImg.height;
+    const { cols, rows }=_ffSplitLayout(meta);
+    const colsCm=_ffSplitColsCm(meta);
+    const rowsCm=_ffSplitRowsCm(meta);
+    const gapCm=parseFloat(meta.gapCm)||1.2;
+
+    const colOuterCm=colsCm.map(v=>v+2*(ppCm+frameWcm));
+    const rowOuterCm=rowsCm.map(v=>v+2*(ppCm+frameWcm));
+    const totalWcm=colOuterCm.reduce((a,b)=>a+b,0)+Math.max(0,cols-1)*gapCm;
+    const totalHcm=rowOuterCm.reduce((a,b)=>a+b,0)+Math.max(0,rows-1)*gapCm;
+
+    const scale=Math.min((stageW/Math.max(1,totalWcm)),(520/Math.max(1,totalHcm)));
+    const totalWpx=Math.max(2,Math.round(totalWcm*scale));
+    const totalHpx=Math.max(2,Math.round(totalHcm*scale));
+    const frameWpx=Math.max(0,Math.round(frameWcm*scale));
+    const ppPx=Math.max(0,Math.round(ppCm*scale));
+    const gapPx=Math.max(2,Math.round(gapCm*scale));
+
+    cvs.width=totalWpx; cvs.height=totalHpx;
+    const ctx=cvs.getContext('2d');
+    ctx.fillStyle=sqBgColor; ctx.fillRect(0,0,totalWpx,totalHpx);
+
+    const xOff=[0];
+    for(let c=1;c<cols;c++) xOff[c]=xOff[c-1]+Math.round(colOuterCm[c-1]*scale)+gapPx;
+    const yOff=[0];
+    for(let r=1;r<rows;r++) yOff[r]=yOff[r-1]+Math.round(rowOuterCm[r-1]*scale)+gapPx;
+
+    let idx=0;
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        if(idx>=(meta.n||1)) break;
+        const imgWpx=Math.max(1,Math.round(colsCm[c]*scale));
+        const imgHpx=Math.max(1,Math.round(rowsCm[r]*scale));
+        const src=_ffSplitSrcBoundsFromMeta(meta,idx,imgW,imgH);
+        _ffDrawQuadroUnit(ctx,srcImg,src,xOff[c],yOff[r],imgWpx,imgHpx,frameWpx,ppPx,ppOn);
+        idx++;
+      }
+    }
+
+    if(info){
+      const parts=[`Composição: ${meta.n} quadros`];
+      if(ppOn&&ppCm>0) parts.push(`Passepartout: ${ppCm}cm`);
+      if(frameWcm>0) parts.push(`Moldura: ${frameWcm}cm`);
+      parts.push(`Total: ${totalWcm.toFixed(1)}×${totalHcm.toFixed(1)}cm`);
+      info.textContent=parts.join('  ·  ');
+    }
+    return;
+  }
 
   const splitAtivo=Boolean(_ffSplitComposicaoAtiva && _ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1);
   if(splitAtivo){
@@ -2480,15 +3266,37 @@ function renderFrame(){
     ctx.strokeRect(frameWpx+ppPx-ppBevel/2, frameWpx+ppPx-ppBevel/2, imgWpx+ppBevel, imgHpx+ppBevel);
   }
 
-  // Imagem
-  const imgX=frameWpx+ppPx;
-  const imgY=frameWpx+ppPx;
-  ctx.drawImage(sqImg.img, imgX, imgY, imgWpx, imgHpx);
+  const artX=frameWpx+ppPx;
+  const artY=frameWpx+ppPx;
+  const sourceW=sqImg.img.naturalWidth||sqImg.img.width;
+  const sourceH=sqImg.img.naturalHeight||sqImg.img.height;
+  const baseScale=(sqFitMode==='cover') ? Math.max(imgWpx/sourceW,imgHpx/sourceH) : Math.min(imgWpx/sourceW,imgHpx/sourceH);
+  const drawW=Math.max(1,sourceW*baseScale*sqImageScale);
+  const drawH=Math.max(1,sourceH*baseScale*sqImageScale);
+
+  sqRenderMetrics={ artX, artY, artWpx:imgWpx, artHpx:imgHpx, drawW, drawH };
+  _sqClampOffsets(sqRenderMetrics);
+  const drawX=artX+((imgWpx-drawW)/2)+sqImageOffsetX;
+  const drawY=artY+((imgHpx-drawH)/2)+sqImageOffsetY;
+
+  ctx.fillStyle=sqMarginColor;
+  ctx.fillRect(artX,artY,imgWpx,imgHpx);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(artX,artY,imgWpx,imgHpx);
+  ctx.clip();
+  ctx.drawImage(sqImg.img, drawX, drawY, drawW, drawH);
+  ctx.restore();
+  ctx.strokeStyle='rgba(26,48,81,0.08)';
+  ctx.lineWidth=1;
+  ctx.strokeRect(artX+.5,artY+.5,imgWpx-1,imgHpx-1);
+  stage.classList.add('can-drag');
 
   // Info de tamanho
-  const info=document.getElementById('sqSizeInfo');
   if(info){
-    const parts=[`Imagem: ${wCm}×${hCm}cm`];
+    const parts=[`Formato: ${_sqRound(wCm)}×${_sqRound(hCm)}cm`];
+    parts.push(`Arte: ${Math.round(sqImageScale*100)}%`);
+    parts.push(sqFitMode==='contain' ? 'Modo: encaixar' : 'Modo: preencher');
     if(ppOn&&ppCm>0) parts.push(`Passepartout: ${ppCm}cm`);
     if(frameWcm>0) parts.push(`Moldura: ${frameWcm}cm`);
     parts.push(`Total: ${totalWcm.toFixed(1)}×${totalHcm.toFixed(1)}cm`);
@@ -3839,8 +4647,21 @@ document.addEventListener('DOMContentLoaded',()=>{
   // Quadro simulação
   const sqWEl=document.getElementById('sqW');
   const sqHEl=document.getElementById('sqH');
-  if(sqWEl) sqWEl.addEventListener('input',()=>validateCmInput(sqWEl,5,300));
-  if(sqHEl) sqHEl.addEventListener('input',()=>validateCmInput(sqHEl,5,300));
+  if(sqWEl) sqWEl.addEventListener('input',()=>validateCmInput(sqWEl,0.1,300));
+  if(sqHEl) sqHEl.addEventListener('input',()=>validateCmInput(sqHEl,0.1,300));
+
+  const qiWEl=document.getElementById('qiW');
+  const qiHEl=document.getElementById('qiH');
+  if(qiWEl) qiWEl.addEventListener('input',()=>validateCmInput(qiWEl,1,500));
+  if(qiHEl) qiHEl.addEventListener('input',()=>validateCmInput(qiHEl,1,500));
+
+  initQIDesignerInteractions();
+  initSQDesignerInteractions();
+
+  window.addEventListener('resize',()=>{
+    if(qImg&&document.getElementById('tab-quadros')?.classList.contains('active')) qiRenderDesigner();
+    if(sqImg&&document.getElementById('tab-simquadro')?.classList.contains('active')) renderFrame();
+  });
 
   // Close mobile nav on ESC
   document.addEventListener('keydown',e=>{
@@ -4310,8 +5131,8 @@ async function compartilharOrcamentoWhatsAppPDF() {
     const blob = new Blob([pdf.output('arraybuffer')], { type: 'application/pdf' });
     const arquivo = new File([blob], nomeArq + '.pdf', { type: 'application/pdf' });
     const texto = cliente
-      ? 'Olá, ' + cliente + '! Segue o orçamento em PDF da Fast Frame Sorocaba.'
-      : 'Segue o orçamento em PDF da Fast Frame Sorocaba.';
+      ? 'Olá, ' + cliente + '! Segue o orçamento da Fast Frame Sorocaba.'
+      : 'Segue o orçamento da Fast Frame Sorocaba.';
 
     if (navigator.share && typeof File !== 'undefined') {
       try {
@@ -4365,8 +5186,8 @@ function _montarMensagemWhatsApp() {
   const fmtMoeda = (v) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
   let msg = cliente ? 'Ola, ' + cliente + '!\n\n' : 'Ola!\n\n';
-  msg += 'Segue o orcamento da *Fast Frame Sorocaba*:\n\n';
-  msg += '*ORCAMENTO*\n';
+  msg += 'Segue o orçamento da *Fast Frame Sorocaba*:\n\n';
+  msg += '*ORÇAMENTO*\n';
   msg += 'Data: ' + fmtData(data) + '\n';
   msg += 'Validade: ' + fmtData(validade) + '\n\n';
 
@@ -4496,8 +5317,6 @@ async function compartilharSimulacaoNoWhatsApp(contexto) {
 
     const telefone = (document.getElementById('orcTelefone')?.value || '').trim().replace(/\D/g, '');
     const cliente = (document.getElementById('orcCliente')?.value || '').trim();
-    let msg = cliente ? ('Ola, ' + cliente + '!\n\n') : 'Ola!\n\n';
-    msg += 'Segue a simulacao do seu quadro (' + (tipo === 'ambiente' ? 'ambiente real' : 'preview do quadro') + ') da Fast Frame Sorocaba.';
 
     const blob = await _canvasToBlob(canvas, 'image/jpeg', 0.92);
     const baseNome = (cliente || 'cliente')
@@ -4511,7 +5330,7 @@ async function compartilharSimulacaoNoWhatsApp(contexto) {
 
     if (navigator.share && typeof File !== 'undefined') {
       try {
-        const shareData = { files: [arquivo], title: 'Simulacao Fast Frame', text: msg };
+        const shareData = { files: [arquivo] };
         if (!navigator.canShare || navigator.canShare(shareData)) {
           await navigator.share(shareData);
           toast('Imagem da simulacao compartilhada.');
@@ -4526,12 +5345,11 @@ async function compartilharSimulacaoNoWhatsApp(contexto) {
     if (salvo === false) return;
 
     const numero = telefone ? '55' + telefone : '';
-    const aviso = msg + '\n\nA imagem da simulacao foi salva neste aparelho. Anexe o arquivo salvo na conversa para enviar.';
     const url = numero
-      ? 'https://wa.me/' + numero + '?text=' + encodeURIComponent(aviso)
-      : 'https://wa.me/?text=' + encodeURIComponent(aviso);
+      ? 'https://wa.me/' + numero
+      : 'https://wa.me/';
     window.open(url, '_blank');
-    toast('Imagem salva. No WhatsApp, anexe para enviar.');
+    toast('Imagem salva. No WhatsApp, envie somente a imagem.');
   } catch (err) {
     toast(err.message || 'Nao foi possivel compartilhar a simulacao.');
   }
@@ -4665,7 +5483,7 @@ function _montarOrcamentoConsolidadoPDFData() {
   pdf.setTextColor(255, 255, 255);
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(16);
-  pdf.text('ORCAMENTO CONSOLIDADO', 14, 15);
+  pdf.text('ORÇAMENTO CONSOLIDADO', 14, 15);
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(10);
   pdf.text('Fast Frame Sorocaba', 14, 23);
@@ -4771,7 +5589,7 @@ function _montarOrcamentoConsolidadoPDFData() {
     .replace(/[^a-zA-Z0-9\u00C0-\u00FF\s\-_]/g, '')
     .replace(/\s+/g, '-')
     .toLowerCase() || 'cliente';
-  const nomeArq = `orcamento-consolidado-${clienteSlug}-${dataRef}`;
+  const nomeArq = `orçamento-consolidado-${clienteSlug}-${dataRef}`;
 
   return { pdf, nomeArq, cliente, telefone, totalFinal, totalBruto, totalDesconto, itens: selecionados.length };
 }
@@ -4779,12 +5597,12 @@ function _montarOrcamentoConsolidadoPDFData() {
 function gerarOrcamentoConsolidadoCliente() {
   try {
     const { pdf, nomeArq } = _montarOrcamentoConsolidadoPDFData();
-    askFileName('orcamento', (finalName) => {
+    askFileName('orçamento', (finalName) => {
       _saveAs(new Blob([pdf.output('arraybuffer')], { type: 'application/pdf' }), finalName, 'application/pdf');
-      toast('Orcamento consolidado gerado!');
+      toast('Orçamento consolidado gerado!');
     }, nomeArq);
   } catch (err) {
-    toast(err.message || 'Nao foi possivel gerar o orcamento consolidado.');
+    toast(err.message || 'Não foi possível gerar o orçamento consolidado.');
   }
 }
 
@@ -4796,14 +5614,14 @@ async function enviarOrcamentoConsolidadoWhatsApp() {
 
     const texto =
       (cliente ? ('Ola, ' + cliente + '!\n\n') : 'Ola!\n\n') +
-      'Segue o orcamento consolidado da Fast Frame Sorocaba com ' + itens + ' simulacoes.\n' +
+      'Segue o orçamento consolidado da Fast Frame Sorocaba com ' + itens + ' simulações.\n' +
       'Valor bruto: ' + _fmtMoeda(totalBruto) + '\n' +
       'Desconto total: - ' + _fmtMoeda(totalDesconto) + '\n' +
       'Total final: ' + _fmtMoeda(totalFinal);
 
     if (navigator.share && typeof File !== 'undefined') {
       try {
-        const shareData = { files: [arquivo], title: 'Orcamento Consolidado Fast Frame', text: texto };
+        const shareData = { files: [arquivo], title: 'Orçamento Consolidado Fast Frame', text: texto };
         if (!navigator.canShare || navigator.canShare(shareData)) {
           await navigator.share(shareData);
           toast('PDF consolidado compartilhado.');
@@ -5219,14 +6037,14 @@ async function excluirUltimoOrcamentoCliente(clienteId) {
     const lista = hist.historico || [];
     if (!lista.length) {
       const okCli = window.confirm(
-        'Esse cliente nao possui orcamentos.\n\n' +
+        'Esse cliente não possui orçamentos.\n\n' +
         'Deseja excluir o cadastro do cliente mesmo assim?'
       );
       if (!okCli) return;
 
       await _ffApi('/api/clientes/' + clienteId, { method: 'DELETE' });
       _removerClienteDaTela(clienteId);
-      toast('Cliente excluido com sucesso.');
+      toast('Cliente excluído com sucesso.');
       carregarClientes();
       return;
     }
@@ -5234,23 +6052,23 @@ async function excluirUltimoOrcamentoCliente(clienteId) {
     const ultimo = lista[0];
     const when = _fmtDataHora(ultimo.created_at);
     const ok = window.confirm(
-      'Excluir o ultimo orcamento de ' + (cli.nome || 'cliente') + '?\n\n' +
+      'Excluir o último orçamento de ' + (cli.nome || 'cliente') + '?\n\n' +
       'Data: ' + when + '\n' +
       'Contexto: ' + (ultimo.contexto || '-') + '\n\n' +
-      'Essa acao nao pode ser desfeita.'
+      'Essa ação não pode ser desfeita.'
     );
     if (!ok) return;
 
     await _ffApi('/api/consultas/' + ultimo.id, { method: 'DELETE' });
     _removerHistoricoDaTela(clienteId, ultimo.id);
-    toast('Ultimo orcamento excluido com sucesso.');
+    toast('Último orçamento excluído com sucesso.');
 
     carregarClientes();
     if (_clienteSelecionadoId === clienteId) {
       carregarHistoricoCliente(clienteId);
     }
   } catch (err) {
-    toast(err.message || 'Erro ao excluir o orcamento.');
+    toast(err.message || 'Erro ao excluir o orçamento.');
   }
 }
 
@@ -5448,8 +6266,8 @@ async function carregarClientes() {
             '</div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
               '<button title="Editar cliente" aria-label="Editar cliente" style="width:30px;height:30px;border-radius:999px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:13px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0" onclick="editarCliente(' + c.id + ')">✏️</button>' +
-              '<button title="Ver historico" aria-label="Ver historico" style="width:30px;height:30px;border-radius:999px;border:1px solid ' + (ativo ? 'var(--gold)' : 'var(--border2)') + ';background:' + (ativo ? 'var(--gold)' : '#fff') + ';color:' + (ativo ? '#fff' : 'var(--brown)') + ';font-size:13px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0" onclick="selecionarCliente(' + c.id + ')">👁</button>' +
-              '<button title="Excluir ultimo orcamento ou cliente" aria-label="Excluir ultimo orcamento ou cliente" style="width:30px;height:30px;border-radius:999px;border:1px solid #E7D9D9;background:#fff;color:#B22222;font-size:13px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0" onclick="excluirUltimoOrcamentoCliente(' + c.id + ')">🗑</button>' +
+              '<button title="Ver histórico" aria-label="Ver histórico" style="width:30px;height:30px;border-radius:999px;border:1px solid ' + (ativo ? 'var(--gold)' : 'var(--border2)') + ';background:' + (ativo ? 'var(--gold)' : '#fff') + ';color:' + (ativo ? '#fff' : 'var(--brown)') + ';font-size:13px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0" onclick="selecionarCliente(' + c.id + ')">👁</button>' +
+              '<button title="Excluir último orçamento ou cliente" aria-label="Excluir último orçamento ou cliente" style="width:30px;height:30px;border-radius:999px;border:1px solid #E7D9D9;background:#fff;color:#B22222;font-size:13px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0" onclick="excluirUltimoOrcamentoCliente(' + c.id + ')">🗑</button>' +
             '</div>' +
           '</div>' +
           '<div style="margin-top:8px;font-size:11px;color:var(--gray)">Pedidos: ' + (c.total_consultas || 0) + (c.ultima_consulta ? (' • Último: ' + _fmtDataHora(c.ultima_consulta)) : '') + '</div>' +
