@@ -3154,61 +3154,6 @@ function renderFrame(){
     return;
   }
 
-  const splitAtivo=Boolean(_ffSplitComposicaoAtiva && _ffSplitComposicaoMeta && (_ffSplitComposicaoMeta.n||0)>1);
-  if(splitAtivo){
-    const meta=_ffSplitComposicaoMeta;
-    const srcImg=_ffSplitReplayImg || ((cImg&&cImg.img)?cImg.img:sqImg.img);
-    const imgW=srcImg.naturalWidth||srcImg.width;
-    const imgH=srcImg.naturalHeight||srcImg.height;
-    const { cols, rows }=_ffSplitLayout(meta);
-    const colsCm=_ffSplitColsCm(meta);
-    const rowsCm=_ffSplitRowsCm(meta);
-    const gapCm=parseFloat(meta.gapCm)||1.2;
-
-    const colOuterCm=colsCm.map(v=>v+2*(ppCm+frameWcm));
-    const rowOuterCm=rowsCm.map(v=>v+2*(ppCm+frameWcm));
-    const totalWcm=colOuterCm.reduce((a,b)=>a+b,0)+Math.max(0,cols-1)*gapCm;
-    const totalHcm=rowOuterCm.reduce((a,b)=>a+b,0)+Math.max(0,rows-1)*gapCm;
-
-    const scale=Math.min((stageW/Math.max(1,totalWcm)),(520/Math.max(1,totalHcm)));
-    const totalWpx=Math.max(2,Math.round(totalWcm*scale));
-    const totalHpx=Math.max(2,Math.round(totalHcm*scale));
-    const frameWpx=Math.max(0,Math.round(frameWcm*scale));
-    const ppPx=Math.max(0,Math.round(ppCm*scale));
-    const gapPx=Math.max(2,Math.round(gapCm*scale));
-
-    cvs.width=totalWpx; cvs.height=totalHpx;
-    const ctx=cvs.getContext('2d');
-    ctx.fillStyle=sqBgColor; ctx.fillRect(0,0,totalWpx,totalHpx);
-
-    const xOff=[0];
-    for(let c=1;c<cols;c++) xOff[c]=xOff[c-1]+Math.round(colOuterCm[c-1]*scale)+gapPx;
-    const yOff=[0];
-    for(let r=1;r<rows;r++) yOff[r]=yOff[r-1]+Math.round(rowOuterCm[r-1]*scale)+gapPx;
-
-    let idx=0;
-    for(let r=0;r<rows;r++){
-      for(let c=0;c<cols;c++){
-        if(idx>=(meta.n||1)) break;
-        const imgWpx=Math.max(1,Math.round(colsCm[c]*scale));
-        const imgHpx=Math.max(1,Math.round(rowsCm[r]*scale));
-        const src=_ffSplitSrcBoundsFromMeta(meta,idx,imgW,imgH);
-        _ffDrawQuadroUnit(ctx,srcImg,src,xOff[c],yOff[r],imgWpx,imgHpx,frameWpx,ppPx,ppOn);
-        idx++;
-      }
-    }
-
-    const info=document.getElementById('sqSizeInfo');
-    if(info){
-      const parts=[`Composição: ${meta.n} quadros`];
-      if(ppOn&&ppCm>0) parts.push(`Passepartout: ${ppCm}cm`);
-      if(frameWcm>0) parts.push(`Moldura: ${frameWcm}cm`);
-      parts.push(`Total: ${totalWcm.toFixed(1)}×${totalHcm.toFixed(1)}cm`);
-      info.textContent=parts.join('  ·  ');
-    }
-    return;
-  }
-
   // Tamanho total = imagem + passepartout + moldura (2 lados)
   const totalWcm=wCm+(ppCm+frameWcm)*2;
   const totalHcm=hCm+(ppCm+frameWcm)*2;
