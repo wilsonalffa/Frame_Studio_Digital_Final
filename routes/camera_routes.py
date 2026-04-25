@@ -119,28 +119,30 @@ def upload_frame():
             'height': img.height,
         }
 
+        # Salva apenas metadados no DB (sem image_b64) para evitar egress excessivo no Supabase.
+        # A imagem fica disponível via cache em memória e socket em tempo real.
         persisted = True
         try:
             with get_db() as conn:
                 if conn.backend == 'postgres':
                     conn.execute(
                         '''
-                        INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
-                        VALUES (?, ?, ?, ?, ?::jsonb, ?::timestamptz)
+                        INSERT INTO frames_cache (id, store_id, user_id, metadata, created_at)
+                        VALUES (?, ?, ?, ?::jsonb, ?::timestamptz)
                         ''',
                         (
-                            frame_id, store_id, user_id, frame_payload['image_url'],
+                            frame_id, store_id, user_id,
                             json.dumps(metadata_payload), agora,
                         ),
                     )
                 else:
                     conn.execute(
                         '''
-                        INSERT INTO frames_cache (id, store_id, user_id, image_b64, metadata, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO frames_cache (id, store_id, user_id, metadata, created_at)
+                        VALUES (?, ?, ?, ?, ?)
                         ''',
                         (
-                            frame_id, store_id, user_id, frame_payload['image_url'],
+                            frame_id, store_id, user_id,
                             json.dumps(metadata_payload), agora,
                         ),
                     )
@@ -203,13 +205,21 @@ def camera_presence_status():
 def latest_camera_frame():
     store_id = current_store_id()
     after_id = str(request.args.get('after_id') or '').strip()
-    row = None
+    # Usa cache em memória como fonte primária para evitar egress do Supabase.
+    # O DB só é consultado para metadados (sem image_b64) quando a memória está vazia.
+    mem_frame = camera_latest_frames.get(int(store_id)) if store_id is not None else None
+    if mem_frame:
+        if after_id and mem_frame.get('frame_id') == after_id:
+            return jsonify({'ok': True, 'frame': None})
+        return jsonify({'ok': True, 'frame': mem_frame})
+
+    # Fallback: busca metadados do DB (sem imagem) para checar se existe registro recente
     try:
         from core.utils import decode_json_field
         with get_db() as conn:
             row = conn.execute(
                 '''
-                SELECT id, image_b64, metadata, created_at
+                SELECT id, metadata, created_at
                 FROM frames_cache
                 WHERE store_id = ?
                 ORDER BY created_at DESC
@@ -217,30 +227,25 @@ def latest_camera_frame():
                 ''',
                 (store_id,)
             ).fetchone()
+        if row:
+            if after_id and row['id'] == after_id:
+                return jsonify({'ok': True, 'frame': None})
+            metadata = decode_json_field(row['metadata'], {}) if row['metadata'] is not None else {}
+            # Imagem não está disponível no DB — retorna frame sem image_url
+            return jsonify({
+                'ok': True,
+                'frame': {
+                    'frame_id': row['id'],
+                    'image_url': None,
+                    'timestamp': row['created_at'],
+                    'width': int(metadata.get('width') or 0),
+                    'height': int(metadata.get('height') or 0),
+                }
+            })
     except Exception as db_exc:
         print(f"⚠️ Falha ao consultar frames_cache (store={store_id}): {db_exc}")
 
-    if row:
-        if after_id and row['id'] == after_id:
-            return jsonify({'ok': True, 'frame': None})
-        from core.utils import decode_json_field
-        metadata = decode_json_field(row['metadata'], {}) if row['metadata'] is not None else {}
-        return jsonify({
-            'ok': True,
-            'frame': {
-                'frame_id': row['id'],
-                'image_url': row['image_b64'],
-                'timestamp': row['created_at'],
-                'width': int(metadata.get('width') or 0),
-                'height': int(metadata.get('height') or 0),
-            }
-        })
-
-    fallback = camera_latest_frames.get(int(store_id)) if store_id is not None else None
-    if not fallback or (after_id and fallback.get('frame_id') == after_id):
-        return jsonify({'ok': True, 'frame': None})
-
-    return jsonify({'ok': True, 'frame': fallback})
+    return jsonify({'ok': True, 'frame': None})
 
 @camera_bp.route('/camera')
 @login_required

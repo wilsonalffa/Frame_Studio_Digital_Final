@@ -14,7 +14,19 @@ def obter_store_state(scope):
         return jsonify({'error': 'Escopo de armazenamento invalido.'}), 404
 
     store_id = current_store_id()
+    meta_only = request.args.get('meta_only') in ('1', 'true')
+
     with get_db() as conn:
+        if meta_only:
+            # Retorna apenas updated_at para validacao de cache no cliente (sem transferir data_json)
+            row = conn.execute(
+                'SELECT updated_at FROM store_state WHERE store_id = ? AND scope = ?',
+                (store_id, normalized)
+            ).fetchone()
+            if not row:
+                return jsonify({'scope': normalized, 'has_data': False, 'updated_at': ''})
+            return jsonify({'scope': normalized, 'has_data': True, 'updated_at': row['updated_at']})
+
         state = load_store_state(conn, store_id, normalized)
 
     if not state:
@@ -59,6 +71,8 @@ def salvar_store_state_route(scope):
 @login_required
 def listar_clientes():
     busca = request.args.get('q', '').strip()
+    limite = min(max(request.args.get('limit', default=100, type=int), 1), 500)
+    offset = max(request.args.get('offset', default=0, type=int), 0)
     store_id = current_store_id()
     with get_db() as conn:
         if busca:
@@ -72,8 +86,9 @@ def listar_clientes():
                 WHERE c.store_id = ?
                   AND (c.nome LIKE ? OR COALESCE(c.telefone, '') LIKE ?)
                 ORDER BY c.updated_at DESC
+                LIMIT ? OFFSET ?
                 ''',
-                (store_id, like, like)
+                (store_id, like, like, limite, offset)
             ).fetchall()
         else:
             rows = conn.execute(
@@ -84,8 +99,9 @@ def listar_clientes():
                 FROM clientes c
                 WHERE c.store_id = ?
                 ORDER BY c.updated_at DESC
+                LIMIT ? OFFSET ?
                 ''',
-                (store_id,)
+                (store_id, limite, offset)
             ).fetchall()
 
     clientes = []
@@ -94,7 +110,7 @@ def listar_clientes():
         cli['total_consultas'] = row['total_consultas'] or 0
         cli['ultima_consulta'] = row['ultima_consulta'] or ''
         clientes.append(cli)
-    return jsonify({'clientes': clientes})
+    return jsonify({'clientes': clientes, 'limit': limite, 'offset': offset})
 
 @crm_bp.route('/api/clientes', methods=['POST'])
 @login_required

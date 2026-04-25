@@ -1649,6 +1649,24 @@ function _roomMigrationFlagKey(){
   return 'ff_store_state_room_migrated_'+storeId;
 }
 
+// Cache localStorage para evitar re-fetch do Supabase a cada carregamento (reduz egress)
+function _roomCacheKey(){
+  const storeId=window.FF_CURRENT_USER?.store_id||'0';
+  return 'ff_rooms_cache_v2_'+storeId;
+}
+function _roomReadCache(){
+  try{
+    const raw=localStorage.getItem(_roomCacheKey());
+    if(!raw) return null;
+    const parsed=JSON.parse(raw);
+    if(!parsed||!parsed.updated_at) return null;
+    return parsed; // {data, updated_at}
+  }catch(_){ return null; }
+}
+function _roomWriteCache(data, updated_at){
+  try{ localStorage.setItem(_roomCacheKey(), JSON.stringify({data, updated_at})); }catch(_){}
+}
+
 function _roomNormalizeStore(data){
   const safe = data && typeof data === 'object' ? data : {};
   const overrides = safe.overrides && typeof safe.overrides === 'object' ? safe.overrides : {};
@@ -1688,10 +1706,12 @@ async function _roomSyncToServer(){
   const payload=_roomNormalizeStore(_roomStoreData);
   _roomStoreSaveInFlight=(async()=>{
     try{
-      await _ffApi('/api/store-state/'+ROOM_STORE_SCOPE, {
+      const resp=await _ffApi('/api/store-state/'+ROOM_STORE_SCOPE, {
         method:'PUT',
         body:JSON.stringify({ data: payload })
       });
+      // Atualiza cache local com o updated_at retornado pelo servidor
+      if(resp && resp.updated_at) _roomWriteCache(payload, resp.updated_at);
       try{ localStorage.setItem(_roomMigrationFlagKey(), '1'); }catch(_){ }
     }catch(err){
       toast(err.message||'Nao foi possivel sincronizar os ambientes da loja.');
@@ -1711,9 +1731,20 @@ async function _roomEnsureStoreLoaded(){
   if(_roomStoreInitPromise) return _roomStoreInitPromise;
   _roomStoreInitPromise=(async()=>{
     try{
+      // 1. Tenta cache local primeiro (zero egress Supabase)
+      const cached=_roomReadCache();
+      if(cached){
+        _roomStoreData=_roomNormalizeStore(cached.data);
+        _roomStoreLoaded=true;
+        // Valida em background se o servidor tem versao mais nova
+        _roomValidateCacheInBackground(cached.updated_at);
+        return _roomStoreData;
+      }
+      // 2. Sem cache: busca completa do servidor
       const resp=await _ffApi('/api/store-state/'+ROOM_STORE_SCOPE);
       if(resp && resp.has_data){
         _roomStoreData=_roomNormalizeStore(resp.data);
+        _roomWriteCache(resp.data, resp.updated_at);
       }else{
         const legacy=_roomNormalizeStore(_roomReadLegacyStore());
         _roomStoreData=legacy;
@@ -1731,6 +1762,26 @@ async function _roomEnsureStoreLoaded(){
     return _roomStoreData;
   })();
   return _roomStoreInitPromise;
+}
+
+async function _roomValidateCacheInBackground(cachedUpdatedAt){
+  try{
+    const meta=await _ffApi('/api/store-state/'+ROOM_STORE_SCOPE+'?meta_only=1');
+    if(meta && meta.has_data && meta.updated_at && meta.updated_at !== cachedUpdatedAt){
+      // Servidor tem versao mais nova: busca completa e atualiza UI
+      const resp=await _ffApi('/api/store-state/'+ROOM_STORE_SCOPE);
+      if(resp && resp.has_data){
+        _roomStoreData=_roomNormalizeStore(resp.data);
+        _roomWriteCache(resp.data, resp.updated_at);
+        _roomApplyOverrides();
+        _roomRenderCustomGrid();
+        Object.keys(ROOM_PATHS).forEach(key=>{
+          const thumb=_roomThumbForKey(key);
+          if(thumb && ROOM_PATHS[key]) _roomUpdateThumbImage(key, ROOM_PATHS[key], thumb.getAttribute('data-room-label')||'Ambiente');
+        });
+      }
+    }
+  }catch(_){}
 }
 
 function _roomApplyOverrides(){
@@ -3498,6 +3549,24 @@ function _ffCatalogMigrationFlagKey(){
   return 'ff_store_state_catalog_migrated_'+storeId;
 }
 
+// Cache localStorage para evitar re-fetch do Supabase a cada carregamento (reduz egress)
+function _ffCatalogCacheKey(){
+  const storeId=window.FF_CURRENT_USER?.store_id||'0';
+  return 'ff_catalog_cache_v2_'+storeId;
+}
+function _ffCatalogReadCache(){
+  try{
+    const raw=localStorage.getItem(_ffCatalogCacheKey());
+    if(!raw) return null;
+    const parsed=JSON.parse(raw);
+    if(!parsed||!parsed.updated_at) return null;
+    return parsed; // {data, updated_at}
+  }catch(_){ return null; }
+}
+function _ffCatalogWriteCache(data, updated_at){
+  try{ localStorage.setItem(_ffCatalogCacheKey(), JSON.stringify({data, updated_at})); }catch(_){}
+}
+
 function _ffCatalogCanUseLegacyFallback(){
   const storeId=window.FF_CURRENT_USER?.store_id;
   // Em ambiente multiunidade, evitar importar legado local automaticamente
@@ -3514,9 +3583,21 @@ function ffCatalogInit(){
 
   _ffCatalogInitPromise=(async()=>{
     try{
+      // 1. Tenta cache local primeiro (zero egress Supabase)
+      const cached=_ffCatalogReadCache();
+      if(cached){
+        _ffCatalogData=_ffCatalogNormalizeData(cached.data);
+        _ffCatalogLoaded=true;
+        ffCatalogRender();
+        // Valida em background se o servidor tem versao mais nova
+        _ffCatalogValidateCacheInBackground(cached.updated_at);
+        return;
+      }
+      // 2. Sem cache: busca completa do servidor
       const resp=await _ffApi('/api/store-state/'+FF_CATALOG_STORE_SCOPE);
       if(resp && resp.has_data){
         _ffCatalogData=_ffCatalogNormalizeData(resp.data);
+        _ffCatalogWriteCache(resp.data, resp.updated_at);
       }else{
         if(_ffCatalogCanUseLegacyFallback()){
           const legacyData=await _ffCatalogReadLegacyData();
@@ -3551,6 +3632,21 @@ function ffCatalogInit(){
   }
 
   return _ffCatalogInitPromise;
+}
+
+async function _ffCatalogValidateCacheInBackground(cachedUpdatedAt){
+  try{
+    const meta=await _ffApi('/api/store-state/'+FF_CATALOG_STORE_SCOPE+'?meta_only=1');
+    if(meta && meta.has_data && meta.updated_at && meta.updated_at !== cachedUpdatedAt){
+      // Servidor tem versao mais nova: busca completa e re-renderiza
+      const resp=await _ffApi('/api/store-state/'+FF_CATALOG_STORE_SCOPE);
+      if(resp && resp.has_data){
+        _ffCatalogData=_ffCatalogNormalizeData(resp.data);
+        _ffCatalogWriteCache(resp.data, resp.updated_at);
+        ffCatalogRender();
+      }
+    }
+  }catch(_){}
 }
 
 function _ffCatalogTs(v){
@@ -3619,10 +3715,12 @@ async function _ffCatalogSyncToServer(){
   const payload=_ffCatalogNormalizeData(_ffCatalogData);
   _ffCatalogSaveInFlight=(async()=>{
     try{
-      await _ffApi('/api/store-state/'+FF_CATALOG_STORE_SCOPE, {
+      const resp=await _ffApi('/api/store-state/'+FF_CATALOG_STORE_SCOPE, {
         method:'PUT',
         body:JSON.stringify({ data: payload })
       });
+      // Atualiza cache local com o updated_at retornado pelo servidor
+      if(resp && resp.updated_at) _ffCatalogWriteCache(payload, resp.updated_at);
       try{ localStorage.setItem(_ffCatalogMigrationFlagKey(), '1'); }catch(_){ }
     }catch(err){
       toast(err.message||'Nao foi possivel sincronizar o catalogo da loja.');

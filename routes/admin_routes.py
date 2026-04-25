@@ -11,6 +11,8 @@ admin_bp = Blueprint('admin', __name__)
 @login_required
 @admin_required
 def listar_lojas():
+    limite = min(max(request.args.get('limit', default=100, type=int), 1), 500)
+    offset = max(request.args.get('offset', default=0, type=int), 0)
     with get_db() as conn:
         rows = conn.execute(
             '''
@@ -27,7 +29,9 @@ def listar_lojas():
                 SELECT ux.id FROM users ux WHERE ux.store_id = s.id ORDER BY ux.id LIMIT 1
             )
             ORDER BY lower(s.name)
-            '''
+            LIMIT ? OFFSET ?
+            ''',
+            (limite, offset)
         ).fetchall()
 
     lojas = []
@@ -41,7 +45,7 @@ def listar_lojas():
         item['total_clientes'] = int(row['total_clientes'] or 0)
         item['total_consultas'] = int(row['total_consultas'] or 0)
         lojas.append(item)
-    return jsonify({'stores': lojas})
+    return jsonify({'stores': lojas, 'limit': limite, 'offset': offset})
 
 
 @admin_bp.route('/api/stores', methods=['POST'])
