@@ -4770,28 +4770,36 @@ function atualizarDetalhesOrcamento() {
     const tamanhoFinalW = (parseFloat(w) + (frameW + (ppOn ? ppSize : 0)) * 2).toFixed(1);
     const tamanhoFinalH = (parseFloat(h) + (frameW + (ppOn ? ppSize : 0)) * 2).toFixed(1);
 
+    const _detItem = (label, value) =>
+      `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--border2)">` +
+      `<input type="checkbox" class="orc-det-cb" checked style="accent-color:var(--gold);width:14px;height:14px;flex-shrink:0;cursor:pointer">` +
+      `<span style="font-size:12px;color:var(--brown)"><strong>${label}:</strong> ${value}</span></label>`;
     detEl.innerHTML =
-      `<div><strong>Modelo do Quadro:</strong> ${modelo}</div>` +
-      (frameW > 0 ? `<div><strong>Moldura:</strong> ${corMoldura}, ${frameW}cm de espessura</div>` : '<div><strong>Moldura:</strong> Sem moldura</div>') +
-      (ppOn ? `<div><strong>Passepartout:</strong> ${corPassepartout}, ${ppSize}cm</div>` : '<div><strong>Passepartout:</strong> Sem passepartout</div>') +
-      `<div><strong>Vidro:</strong> ${vidro}</div>` +
-      `<div><strong>Fundo:</strong> ${fundo}</div>` +
-      `<div><strong>Tamanho da imagem:</strong> ${w} × ${h} cm</div>` +
-      `<div><strong>Tamanho Final:</strong> ${tamanhoFinalW} × ${tamanhoFinalH} cm</div>`;
+      _detItem('Modelo do Quadro', modelo) +
+      (frameW > 0 ? _detItem('Moldura', `${corMoldura}, ${frameW}cm de espessura`) : _detItem('Moldura', 'Sem moldura')) +
+      (ppOn ? _detItem('Passepartout', `${corPassepartout}, ${ppSize}cm`) : _detItem('Passepartout', 'Sem passepartout')) +
+      _detItem('Vidro', vidro) +
+      _detItem('Fundo', fundo) +
+      _detItem('Tamanho da imagem', `${w} × ${h} cm`) +
+      _detItem('Tamanho Final', `${tamanhoFinalW} × ${tamanhoFinalH} cm`);
     return;
   }
 
   if (_orcContexto === 'ambiente' && wEnvImg && wArtImg) {
     const w = document.getElementById('wW')?.value || 80;
     const h = document.getElementById('wH')?.value || 60;
+    const _detItem = (label, value) =>
+      `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--border2)">` +
+      `<input type="checkbox" class="orc-det-cb" checked style="accent-color:var(--gold);width:14px;height:14px;flex-shrink:0;cursor:pointer">` +
+      `<span style="font-size:12px;color:var(--brown)"><strong>${label}:</strong> ${value}</span></label>`;
     detEl.innerHTML =
-      `<div><strong>Modelo do Quadro:</strong> ${modelo}</div>` +
-      `<div><strong>Moldura:</strong> Simulação em ambiente</div>` +
-      `<div><strong>Passepartout:</strong> Não aplicado</div>` +
-      `<div><strong>Vidro:</strong> ${vidro}</div>` +
-      `<div><strong>Fundo:</strong> ${fundo}</div>` +
-      `<div><strong>Tamanho da imagem:</strong> ${w} × ${h} cm</div>` +
-      `<div><strong>Tamanho Final:</strong> ${w} × ${h} cm</div>`;
+      _detItem('Modelo do Quadro', modelo) +
+      _detItem('Moldura', 'Simulação em ambiente') +
+      _detItem('Passepartout', 'Não aplicado') +
+      _detItem('Vidro', vidro) +
+      _detItem('Fundo', fundo) +
+      _detItem('Tamanho da imagem', `${w} × ${h} cm`) +
+      _detItem('Tamanho Final', `${w} × ${h} cm`);
     return;
   }
 
@@ -4869,6 +4877,17 @@ function fecharOrcamento(limparEdicao = true) {
   if (cvs) cvs.style.cursor = 'default';
 }
 
+function _orcGetDetalhesLinhas() {
+  return [...document.querySelectorAll('#orcDetalhes .orc-det-cb')]
+    .filter(cb => cb.checked)
+    .map(cb => cb.nextElementSibling?.textContent.trim())
+    .filter(Boolean);
+}
+
+function orcToggleTodosDetalhes(checked) {
+  document.querySelectorAll('#orcDetalhes .orc-det-cb').forEach(cb => { cb.checked = checked; });
+}
+
 function _montarOrcamentoPDFData() {
   const { jsPDF } = window.jspdf;
 
@@ -4881,6 +4900,7 @@ function _montarOrcamentoPDFData() {
   const obs = document.getElementById('orcObs').value.trim();
   const total = Math.max(0, preco - desconto);
   const detalhes = document.getElementById('orcDetalhes').innerText.trim();
+  const linhasDetalhes = _orcGetDetalhesLinhas();
 
   const fmtData = (s) => {
     if (!s) return '';
@@ -4966,16 +4986,7 @@ function _montarOrcamentoPDFData() {
   pdf.line(14, y, W - 14, y);
   y += 8;
 
-  // Seção: Detalhes do Quadro
-  pdf.setFillColor(244, 247, 252);
-  pdf.roundedRect(14, y, W - 28, 8, 2, 2, 'F');
-  pdf.setTextColor(26, 48, 81);
-  pdf.setFontSize(10);
-  pdf.setFont('helvetica', 'bold');
-  pdf.text('DETALHES DO QUADRO', 18, y + 5.5);
-  y += 14;
-
-  // Preview do quadro
+  // Preview da simulacao (sempre visivel)
   const prevCvs = document.getElementById('orcPreviewCanvas');
   if (prevCvs && prevCvs.width > 1) {
     try {
@@ -4990,16 +5001,26 @@ function _montarOrcamentoPDFData() {
     } catch(e) {}
   }
 
-  // Linhas de detalhes
-  pdf.setTextColor(50, 50, 50);
-  pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(9);
-  const linhas = detalhes.split('\n').filter(l => l.trim());
-  linhas.forEach(linha => {
-    pdf.text(linha.trim(), 18, y);
-    y += 5.5;
-  });
-  y += 2;
+  if (linhasDetalhes.length > 0) {
+    // Seção: Detalhes do Quadro
+    pdf.setFillColor(244, 247, 252);
+    pdf.roundedRect(14, y, W - 28, 8, 2, 2, 'F');
+    pdf.setTextColor(26, 48, 81);
+    pdf.setFontSize(10);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('DETALHES DO QUADRO', 18, y + 5.5);
+    y += 14;
+
+    pdf.setTextColor(50, 50, 50);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(9);
+    linhasDetalhes.forEach(linha => {
+      pdf.text(linha.trim(), 18, y);
+      y += 5.5;
+    });
+    y += 2;
+  } 
+  
 
   // Linha separadora
   pdf.setDrawColor(220, 220, 220);
@@ -5217,7 +5238,7 @@ function _montarMensagemWhatsApp() {
   const preco     = parseFloat(document.getElementById('orcPreco')?.value) || 0;
   const desconto  = parseFloat(document.getElementById('orcDesconto')?.value) || 0;
   const obs       = document.getElementById('orcObs')?.value.trim() || '';
-  const detalhes  = document.getElementById('orcDetalhes')?.innerText.trim() || '';
+  const linhasDetalhes = _orcGetDetalhesLinhas();
   const total     = Math.max(0, preco - desconto);
 
   const pgDinheiro  = document.getElementById('pgDinheiro')?.checked;
@@ -5235,11 +5256,12 @@ function _montarMensagemWhatsApp() {
   msg += 'Validade: ' + fmtData(validade) + '\n\n';
 
   msg += '*DETALHES DO QUADRO*\n';
-  if (detalhes) {
-    const linhas = detalhes.split('\n').filter(l => l.trim());
-    linhas.forEach(linha => {
+  if (linhasDetalhes.length > 0) {
+    linhasDetalhes.forEach(linha => {
       msg += linha.trim() + '\n';
     });
+  } else {
+    msg += 'Detalhes tecnicos ocultados pela loja.\n';
   }
 
   msg += '\n*VALORES*\n';

@@ -43,6 +43,21 @@ let wallCompositionLocked = false;
 let wallGroupDragging = false;
 let wallGroupDragState = null;
 
+// Marca d'agua da simulacao de ambiente
+let wallWatermarkEnabled = false;
+let wallWatermarkText = 'FAST FRAME SOROCABA';
+let wallWatermarkSizePct = 5.5; // % da largura do canvas
+let wallWatermarkXPct = 50;
+let wallWatermarkYPct = 92;
+let wallWatermarkRotationDeg = -18;
+let wallWatermarkLocked = false;
+let wallWatermarkDragging = false;
+let wallWatermarkDragOffX = 0;
+let wallWatermarkDragOffY = 0;
+let wallWatermarkMode = 'text'; // 'text' | 'logo'
+let wallWatermarkLogoImg = null;
+let wallWatermarkOpacity = 0.68; // 0 a 1
+
 // Estrutura de um quadro:
 // { img, xP, yP, wCm, hCm, frameColor, frameW, ppOn, ppColor, ppSize, shadow, id }
 
@@ -351,6 +366,303 @@ function _wallDoRender() {
     _wallDrawGuides(ctx, cvs.width, cvs.height);
   }
 
+  // Marca d'agua acima da simulacao exportada
+  _wallDrawWatermark(ctx, cvs.width, cvs.height);
+
+}
+
+let wallWatermarkCustomLogoImg = null; // imagem carregada pelo usuário
+
+function _wallGetLogoImg() {
+  // Prioridade 1: logo carregada pelo usuário via upload
+  if (wallWatermarkCustomLogoImg && wallWatermarkCustomLogoImg.complete && wallWatermarkCustomLogoImg.naturalWidth) {
+    return wallWatermarkCustomLogoImg;
+  }
+  // Prioridade 2: logo_branco.png (carregada uma vez e cacheada)
+  if (!wallWatermarkLogoImg) {
+    wallWatermarkLogoImg = new Image();
+    wallWatermarkLogoImg.onload = () => { if (wallWatermarkEnabled && wallWatermarkMode === 'logo') renderWall(); };
+    wallWatermarkLogoImg.src = '/static/logo_branco.png';
+  }
+  return wallWatermarkLogoImg;
+}
+
+function wallLoadCustomLogoWatermark(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      wallWatermarkCustomLogoImg = img;
+      _wallUpdateLogoPreview(img.src);
+      if (wallWatermarkEnabled && wallWatermarkMode === 'logo') renderWall();
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  // Limpar input para permitir recarregar o mesmo arquivo
+  e.target.value = '';
+}
+
+function wallResetLogoWatermark() {
+  wallWatermarkCustomLogoImg = null;
+  _wallUpdateLogoPreview(null);
+  if (wallWatermarkEnabled && wallWatermarkMode === 'logo') renderWall();
+}
+
+function _wallUpdateLogoPreview(src) {
+  const el = document.getElementById('wallWmLogoPreview');
+  if (!el) return;
+  if (src) {
+    el.innerHTML = `<img src="${src}" style="max-height:40px;max-width:100%;border-radius:4px;border:1px solid var(--border2);background:#fff;padding:2px">`;
+  } else {
+    el.innerHTML = '<span style="font-size:10px;color:var(--gray)">Logo padrão do sistema</span>';
+  }
+}
+
+function _wallDrawWatermark(ctx, cW, cH) {
+  if (!wallWatermarkEnabled) return;
+
+  const x = Math.max(0, Math.min(cW, (wallWatermarkXPct / 100) * cW));
+  const y = Math.max(0, Math.min(cH, (wallWatermarkYPct / 100) * cH));
+  const angle = (wallWatermarkRotationDeg * Math.PI) / 180;
+
+  if (wallWatermarkMode === 'logo') {
+    const logoImg = _wallGetLogoImg();
+    if (!logoImg || !logoImg.complete || !logoImg.naturalWidth) return;
+    const imgW = Math.max(20, Math.round(cW * (Math.max(1.5, wallWatermarkSizePct) / 100)));
+    const imgH = Math.round(imgW * (logoImg.naturalHeight / logoImg.naturalWidth));
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.globalAlpha = wallWatermarkOpacity;
+    // Sombra escura garante visibilidade em fundos claros
+    ctx.filter = 'drop-shadow(0px 0px 4px rgba(0,0,0,0.7)) drop-shadow(0px 0px 8px rgba(0,0,0,0.4))';
+    ctx.drawImage(logoImg, -imgW / 2, -imgH / 2, imgW, imgH);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    return;
+  }
+
+  // Modo texto
+  const txt = String(wallWatermarkText || '').trim();
+  if (!txt) return;
+  const fontPx = Math.max(14, Math.round(cW * (Math.max(1.5, wallWatermarkSizePct) / 100)));
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.font = `700 ${fontPx}px 'Avenir','Nunito',sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.globalAlpha = wallWatermarkOpacity;
+  // Borda clara melhora leitura em paredes escuras
+  ctx.lineWidth = Math.max(2, Math.round(fontPx * 0.09));
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.strokeText(txt, 0, 0);
+
+  // Preenchimento para inibir reutilizacao indevida
+  ctx.fillStyle = 'rgba(20,36,62,0.9)';
+  ctx.fillText(txt, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function _wallGetWatermarkBox(cvs) {
+  if (!cvs || !wallWatermarkEnabled) return null;
+
+  const cW = cvs.width;
+  const cH = cvs.height;
+  const x = Math.max(0, Math.min(cW, (wallWatermarkXPct / 100) * cW));
+  const y = Math.max(0, Math.min(cH, (wallWatermarkYPct / 100) * cH));
+  const angle = (wallWatermarkRotationDeg * Math.PI) / 180;
+
+  if (wallWatermarkMode === 'logo') {
+    const logoImg = _wallGetLogoImg();
+    if (!logoImg || !logoImg.naturalWidth) return null;
+    const imgW = Math.max(20, Math.round(cW * (Math.max(1.5, wallWatermarkSizePct) / 100)));
+    const imgH = Math.round(imgW * (logoImg.naturalHeight / logoImg.naturalWidth));
+    const halfW = imgW / 2;
+    const halfH = imgH / 2;
+    const cosA = Math.abs(Math.cos(angle));
+    const sinA = Math.abs(Math.sin(angle));
+    const aabbHalfW = (halfW * cosA) + (halfH * sinA);
+    const aabbHalfH = (halfW * sinA) + (halfH * cosA);
+    return { x, y, left: x - aabbHalfW, right: x + aabbHalfW, top: y - aabbHalfH, bottom: y + aabbHalfH };
+  }
+
+  // Modo texto
+  const txt = String(wallWatermarkText || '').trim();
+  if (!txt) return null;
+
+  const fontPx = Math.max(14, Math.round(cW * (Math.max(1.5, wallWatermarkSizePct) / 100)));
+  const ctx = cvs.getContext('2d');
+  ctx.save();
+  ctx.font = `700 ${fontPx}px 'Avenir','Nunito',sans-serif`;
+  const m = ctx.measureText(txt);
+  ctx.restore();
+
+  // Fallbacks para navegadores sem actualBoundingBox
+  const textW = Math.max(10, m.width || (txt.length * fontPx * 0.55));
+  const textH = Math.max(10, (m.actualBoundingBoxAscent || fontPx * 0.72) + (m.actualBoundingBoxDescent || fontPx * 0.28));
+  const pad = Math.max(8, Math.round(fontPx * 0.24));
+
+  // Caixa alinhada ao eixo que envolve o texto rotacionado
+  const halfW = (textW / 2) + pad;
+  const halfH = (textH / 2) + pad;
+  const cosA = Math.abs(Math.cos(angle));
+  const sinA = Math.abs(Math.sin(angle));
+  const aabbHalfW = (halfW * cosA) + (halfH * sinA);
+  const aabbHalfH = (halfW * sinA) + (halfH * cosA);
+
+  return {
+    x,
+    y,
+    left: x - aabbHalfW,
+    right: x + aabbHalfW,
+    top: y - aabbHalfH,
+    bottom: y + aabbHalfH,
+  };
+}
+
+function _wallWatermarkHitTest(px, py, cvs) {
+  const b = _wallGetWatermarkBox(cvs);
+  if (!b) return false;
+  return px >= b.left && px <= b.right && py >= b.top && py <= b.bottom;
+}
+
+function _wallUpdateWatermarkUI() {
+  const cb = document.getElementById('wallWmEnabled');
+  const lockCb = document.getElementById('wallWmLock');
+  const txt = document.getElementById('wallWmText');
+  const sz = document.getElementById('wallWmSize');
+  const xp = document.getElementById('wallWmX');
+  const yp = document.getElementById('wallWmY');
+  const rot = document.getElementById('wallWmRot');
+  const szL = document.getElementById('wallWmSizeL');
+  const xL = document.getElementById('wallWmXL');
+  const yL = document.getElementById('wallWmYL');
+  const rotL = document.getElementById('wallWmRotL');
+  const centerBtn = document.getElementById('wallWmCenterBtn');
+
+  if (cb) cb.checked = wallWatermarkEnabled;
+  if (lockCb) lockCb.checked = wallWatermarkLocked;
+  if (txt) txt.value = wallWatermarkText;
+  if (sz) sz.value = String(wallWatermarkSizePct);
+  if (xp) xp.value = String(wallWatermarkXPct);
+  if (yp) yp.value = String(wallWatermarkYPct);
+  if (rot) rot.value = String(wallWatermarkRotationDeg);
+  if (szL) szL.textContent = wallWatermarkSizePct.toFixed(1) + '%';
+  if (xL) xL.textContent = Math.round(wallWatermarkXPct) + '%';
+  if (yL) yL.textContent = Math.round(wallWatermarkYPct) + '%';
+  if (rotL) rotL.textContent = Math.round(wallWatermarkRotationDeg) + '°';
+  const opc = document.getElementById('wallWmOpacity');
+  const opcL = document.getElementById('wallWmOpacityL');
+  if (opc) opc.value = String(Math.round(wallWatermarkOpacity * 100));
+  if (opcL) opcL.textContent = Math.round(wallWatermarkOpacity * 100) + '%';
+
+  // Sincronizar botões de modo
+  const modeText = document.getElementById('wallWmModeText');
+  const modeLogo = document.getElementById('wallWmModeLogo');
+  const textRow = document.getElementById('wallWmTextRow');
+  const logoRow = document.getElementById('wallWmLogoRow');
+  const isLogo = (wallWatermarkMode === 'logo');
+  if (modeText) modeText.checked = !isLogo;
+  if (modeLogo) modeLogo.checked = isLogo;
+  if (textRow) textRow.style.display = isLogo ? 'none' : '';
+  if (logoRow) logoRow.style.display = isLogo ? '' : 'none';
+
+  const enabled = wallWatermarkEnabled;
+  if (txt) txt.disabled = !enabled;
+  if (sz) sz.disabled = !enabled;
+  if (xp) xp.disabled = !enabled;
+  if (yp) yp.disabled = !enabled;
+  if (rot) rot.disabled = !enabled;
+  if (centerBtn) centerBtn.disabled = !enabled;
+  if (centerBtn) centerBtn.style.opacity = enabled ? '1' : '.55';
+  if (lockCb) lockCb.disabled = !enabled;
+  if (modeText) modeText.disabled = !enabled;
+  if (modeLogo) modeLogo.disabled = !enabled;
+  const opc2 = document.getElementById('wallWmOpacity');
+  if (opc2) opc2.disabled = !enabled;
+
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs && enabled && !wallWatermarkLocked) {
+    // Cursor fica default; o hover muda para grab quando passa na marca
+  }
+}
+
+function wallSetWatermarkMode(mode) {
+  wallWatermarkMode = (mode === 'logo') ? 'logo' : 'text';
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function toggleWallWatermark() {
+  const cb = document.getElementById('wallWmEnabled');
+  wallWatermarkEnabled = !!(cb && cb.checked);
+  if (!wallWatermarkEnabled) wallWatermarkDragging = false;
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function toggleWallWatermarkLock() {
+  const cb = document.getElementById('wallWmLock');
+  wallWatermarkLocked = !!(cb && cb.checked);
+  if (wallWatermarkLocked) wallWatermarkDragging = false;
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallCenterWatermark() {
+  wallWatermarkXPct = 50;
+  wallWatermarkYPct = 50;
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallSetWatermarkText(v) {
+  wallWatermarkText = String(v || '').slice(0, 64);
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallSetWatermarkSize(v) {
+  const n = parseFloat(v);
+  wallWatermarkSizePct = Math.max(0.5, isFinite(n) ? n : wallWatermarkSizePct);
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallSetWatermarkX(v) {
+  const n = parseFloat(v);
+  wallWatermarkXPct = Math.max(0, Math.min(100, isFinite(n) ? n : wallWatermarkXPct));
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallSetWatermarkY(v) {
+  const n = parseFloat(v);
+  wallWatermarkYPct = Math.max(0, Math.min(100, isFinite(n) ? n : wallWatermarkYPct));
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallSetWatermarkRotation(v) {
+  const n = parseFloat(v);
+  wallWatermarkRotationDeg = Math.max(-60, Math.min(60, isFinite(n) ? n : wallWatermarkRotationDeg));
+  _wallUpdateWatermarkUI();
+  renderWall();
+}
+
+function wallSetWatermarkOpacity(v) {
+  const n = parseFloat(v);
+  wallWatermarkOpacity = Math.max(0, Math.min(1, isFinite(n) ? n / 100 : wallWatermarkOpacity));
+  _wallUpdateWatermarkUI();
+  renderWall();
 }
 
 function _wallDrawFrame(ctx, f, cW, cH, ppc, isSelected) {
@@ -593,11 +905,25 @@ function wallInitDrag() {
   function getPPC() { return cvs.width / 300; }
 
   function onDown(e) {
-    if (!wEnvImg || !wallFrames.length) return;
+    if (!wEnvImg) return;
     e.preventDefault();
     const { x, y } = _wallCanvasPos(e, cvs);
     const ppc = getPPC();
     const cW = cvs.width, cH = cvs.height;
+
+    // Prioridade: se clicou na marca d'agua, arrastar marca
+    if (_wallWatermarkHitTest(x, y, cvs) && !wallWatermarkLocked) {
+      const box = _wallGetWatermarkBox(cvs);
+      if (box) {
+        wallWatermarkDragging = true;
+        wallWatermarkDragOffX = x - box.x;
+        wallWatermarkDragOffY = y - box.y;
+        cvs.style.cursor = 'grabbing';
+        return;
+      }
+    }
+
+    if (!wallFrames.length) return;
 
     // Hit-test para selecionar/arrastar
     const hit = _wallHitTest(x, y, cW, cH, ppc);
@@ -635,6 +961,17 @@ function wallInitDrag() {
     const ppc = getPPC();
     const cW = cvs.width, cH = cvs.height;
 
+    if (wallWatermarkDragging) {
+      e.preventDefault();
+      const nx = x - wallWatermarkDragOffX;
+      const ny = y - wallWatermarkDragOffY;
+      wallWatermarkXPct = Math.max(0, Math.min(100, (nx / cW) * 100));
+      wallWatermarkYPct = Math.max(0, Math.min(100, (ny / cH) * 100));
+      _wallUpdateWatermarkUI();
+      renderWall();
+      return;
+    }
+
     if (wallGroupDragging && wallGroupDragState) {
       e.preventDefault();
       const dxP = ((x - wallGroupDragState.startX) / cW) * 100;
@@ -670,14 +1007,23 @@ function wallInitDrag() {
 
     // Cursor hover
     const hit = _wallHitTest(x, y, cW, cH, ppc);
-    cvs.style.cursor = hit >= 0 ? 'grab' : 'default';
+    if (hit >= 0) {
+      cvs.style.cursor = 'grab';
+      return;
+    }
+    if (_wallWatermarkHitTest(x, y, cvs) && !wallWatermarkLocked) {
+      cvs.style.cursor = 'grab';
+      return;
+    }
+    cvs.style.cursor = 'default';
   }
 
   function onUp() {
-    if (wallDragging || wallResizing || wallGroupDragging) {
+    if (wallDragging || wallResizing || wallGroupDragging || wallWatermarkDragging) {
       wallDragging = false;
       wallResizing = false;
       wallGroupDragging = false;
+      wallWatermarkDragging = false;
       wallGroupDragState = null;
       wallResizeStartFrame = null;
       _wallRenderPanel();
@@ -929,6 +1275,7 @@ function wallCopyStyleToAll() {
 
 document.addEventListener('DOMContentLoaded', () => {
   _wallUpdateCompositionLockBtn();
+  _wallUpdateWatermarkUI();
   // Inicializar drag após canvas estar visível
   const obs = new MutationObserver(() => {
     const cvs = document.getElementById('wallCanvas');

@@ -1393,6 +1393,94 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
             <div style="font-size:11px;color:var(--gray);text-align:center;margin-top:4px">Clique em "+ Adicionar Quadro" para cada nova imagem</div>
           </div>
 
+          <div class="canvas-card">
+            <div class="card-h" style="margin-bottom:10px">Proteção da Simulação</div>
+            <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:9px 10px;cursor:pointer">
+              <span style="font-size:12px;font-weight:700;color:var(--brown)">Ativar marca d'agua</span>
+              <input type="checkbox" id="wallWmEnabled" onchange="toggleWallWatermark()" style="accent-color:var(--gold)">
+            </label>
+
+            <!-- Modo: Texto ou Logo -->
+            <div style="display:flex;gap:6px;margin-top:8px">
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--cream2);border:1px solid var(--border2);border-radius:7px;padding:7px 6px;cursor:pointer;font-size:11px;font-weight:700;color:var(--brown)">
+                <input type="radio" id="wallWmModeText" name="wallWmMode" value="text" checked onchange="wallSetWatermarkMode('text')" style="accent-color:var(--gold)">
+                ✏️ Texto
+              </label>
+              <label style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--cream2);border:1px solid var(--border2);border-radius:7px;padding:7px 6px;cursor:pointer;font-size:11px;font-weight:700;color:var(--brown)">
+                <input type="radio" id="wallWmModeLogo" name="wallWmMode" value="logo" onchange="wallSetWatermarkMode('logo')" style="accent-color:var(--gold)">
+                🏷️ Logo da loja
+              </label>
+            </div>
+
+            <!-- Upload de logo customizada (visível só no modo logo) -->
+            <div id="wallWmLogoRow" style="display:none;margin-top:8px">
+              <input type="file" id="wallWmLogoFile" accept="image/*" style="display:none" onchange="wallLoadCustomLogoWatermark(event)">
+              <div style="display:flex;gap:6px;align-items:center">
+                <button type="button" onclick="document.getElementById('wallWmLogoFile').click()"
+                  style="flex:1;padding:7px 10px;border-radius:7px;border:1px dashed var(--gold);background:var(--cream2);color:var(--gold);font-family:'Avenir','Nunito',sans-serif;font-size:11px;font-weight:700;cursor:pointer;text-align:center">
+                  📁 Carregar imagem de logo
+                </button>
+                <button type="button" id="wallWmLogoResetBtn" onclick="wallResetLogoWatermark()" title="Usar logo padrão"
+                  style="padding:7px 8px;border-radius:7px;border:1px solid var(--border2);background:var(--cream2);color:var(--brown);font-family:'Avenir','Nunito',sans-serif;font-size:11px;font-weight:700;cursor:pointer">
+                  ↺
+                </button>
+              </div>
+              <div id="wallWmLogoPreview" style="margin-top:6px;text-align:center;min-height:32px"></div>
+            </div>
+
+            <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:6px;background:var(--cream2);border:1px solid var(--border2);border-radius:7px;padding:6px 9px;cursor:pointer">
+                <input type="checkbox" id="wallWmLock" onchange="toggleWallWatermarkLock()" style="accent-color:var(--gold)">
+                <span style="font-size:11px;font-weight:700;color:var(--brown)">Travar arraste</span>
+              </label>
+              <button id="wallWmCenterBtn" type="button" onclick="wallCenterWatermark()"
+                style="padding:6px 9px;border-radius:7px;border:1px solid var(--border2);background:var(--cream2);color:var(--brown);font-family:'Avenir','Nunito',sans-serif;font-size:11px;font-weight:700;cursor:pointer">
+                Centralizar
+              </button>
+            </div>
+
+            <div id="wallWmTextRow" style="margin-top:10px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gray);display:block;margin-bottom:5px">Texto</label>
+              <input id="wallWmText" type="text" maxlength="64" value="SIMULACAO FAST FRAME" oninput="wallSetWatermarkText(this.value)"
+                style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:12px;padding:8px 10px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+            </div>
+
+            <div style="margin-top:10px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gray);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span>Tamanho</span><span id="wallWmSizeL">5.5%</span>
+              </label>
+              <input id="wallWmSize" type="range" min="1" max="100" step="0.5" value="5.5" oninput="wallSetWatermarkSize(this.value)" style="width:100%">
+            </div>
+
+            <div style="margin-top:8px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gray);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span>Posição horizontal</span><span id="wallWmXL">50%</span>
+              </label>
+              <input id="wallWmX" type="range" min="0" max="100" step="1" value="50" oninput="wallSetWatermarkX(this.value)" style="width:100%">
+            </div>
+
+            <div style="margin-top:8px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gray);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span>Posição vertical</span><span id="wallWmYL">92%</span>
+              </label>
+              <input id="wallWmY" type="range" min="0" max="100" step="1" value="92" oninput="wallSetWatermarkY(this.value)" style="width:100%">
+            </div>
+
+            <div style="margin-top:8px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gray);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span>Rotação</span><span id="wallWmRotL">-18°</span>
+              </label>
+              <input id="wallWmRot" type="range" min="-60" max="60" step="1" value="-18" oninput="wallSetWatermarkRotation(this.value)" style="width:100%">
+            </div>
+
+            <div style="margin-top:8px">
+              <label style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gray);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span>Transparência</span><span id="wallWmOpacityL">68%</span>
+              </label>
+              <input id="wallWmOpacity" type="range" min="0" max="100" step="1" value="68" oninput="wallSetWatermarkOpacity(this.value)" style="width:100%">
+            </div>
+          </div>
+
           <!-- Lista de quadros na cena -->
           <div class="canvas-card">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
@@ -1975,6 +2063,11 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
         <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--gray);margin-bottom:10px">Detalhes do Quadro</div>
         <div id="orcDetalhes" style="font-size:13px;color:var(--brown);line-height:2"></div>
       </div>
+
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f7f9fc;border:1px solid var(--border2);border-radius:8px;padding:10px 12px;cursor:pointer">
+        <span style="font-size:12px;color:var(--brown);font-weight:700">✔ Marcar / desmarcar todos os detalhes</span>
+        <input type="checkbox" id="orcIncluirDetalhes" checked style="accent-color:var(--gold)" onchange="orcToggleTodosDetalhes(this.checked)">
+      </label>
 
       <!-- Preço -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
