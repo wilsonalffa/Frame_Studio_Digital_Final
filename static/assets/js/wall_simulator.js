@@ -433,14 +433,23 @@ function _wallDrawWatermark(ctx, cW, cH) {
     if (!logoImg || !logoImg.complete || !logoImg.naturalWidth) return;
     const imgW = Math.max(20, Math.round(cW * (Math.max(1.5, wallWatermarkSizePct) / 100)));
     const imgH = Math.round(imgW * (logoImg.naturalHeight / logoImg.naturalWidth));
+
+    // Renderiza logo + sombra num canvas offscreen para que o globalAlpha
+    // se aplique ao conjunto (evita sombra visível quando opacidade é baixa)
+    const pad = 20;
+    const off = document.createElement('canvas');
+    off.width  = imgW + pad * 2;
+    off.height = imgH + pad * 2;
+    const octx = off.getContext('2d');
+    octx.filter = 'drop-shadow(0px 0px 4px rgba(0,0,0,0.7)) drop-shadow(0px 0px 8px rgba(0,0,0,0.4))';
+    octx.drawImage(logoImg, pad, pad, imgW, imgH);
+    octx.filter = 'none';
+
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.globalAlpha = wallWatermarkOpacity;
-    // Sombra escura garante visibilidade em fundos claros
-    ctx.filter = 'drop-shadow(0px 0px 4px rgba(0,0,0,0.7)) drop-shadow(0px 0px 8px rgba(0,0,0,0.4))';
-    ctx.drawImage(logoImg, -imgW / 2, -imgH / 2, imgW, imgH);
-    ctx.filter = 'none';
+    ctx.drawImage(off, -(imgW / 2) - pad, -(imgH / 2) - pad);
     ctx.globalAlpha = 1;
     ctx.restore();
     return;
