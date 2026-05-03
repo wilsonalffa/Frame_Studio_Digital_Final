@@ -1332,10 +1332,10 @@ function applyBleed(){
     p.restore();
     // Cantos
     const cpSrcW=Math.round(srcW*BP/sw), cpSrcH=Math.round(srcH*BP/sh);
-    p.save(); p.translate(BP,BP);       p.scale(-1,-1); p.drawImage(img,srcX,srcY,cpSrcW,cpSrcH,0,0,BP,BP);                       p.restore();
-    p.save(); p.translate(sw+BP,BP);    p.scale(1,-1);  p.drawImage(img,srcX+srcW-cpSrcW,srcY,cpSrcW,cpSrcH,0,0,BP,BP);           p.restore();
-    p.save(); p.translate(BP,sh+BP);    p.scale(-1,1);  p.drawImage(img,srcX,srcY+srcH-cpSrcH,cpSrcW,cpSrcH,0,0,BP,BP);           p.restore();
-    p.save(); p.translate(sw+BP,sh+BP);                 p.drawImage(img,srcX+srcW-cpSrcW,srcY+srcH-cpSrcH,cpSrcW,cpSrcH,0,0,BP,BP); p.restore();
+    p.save(); p.translate(BP,BP);             p.scale(-1,-1); p.drawImage(img,srcX,srcY,cpSrcW,cpSrcH,0,0,BP,BP);                       p.restore();
+    p.save(); p.translate(sw+BP*2,BP);        p.scale(-1,-1); p.drawImage(img,srcX+srcW-cpSrcW,srcY,cpSrcW,cpSrcH,0,0,BP,BP);           p.restore();
+    p.save(); p.translate(BP,sh+BP*2);        p.scale(-1,-1); p.drawImage(img,srcX,srcY+srcH-cpSrcH,cpSrcW,cpSrcH,0,0,BP,BP);           p.restore();
+    p.save(); p.translate(sw+BP*2,sh+BP*2);   p.scale(-1,-1); p.drawImage(img,srcX+srcW-cpSrcW,srcY+srcH-cpSrcH,cpSrcW,cpSrcH,0,0,BP,BP); p.restore();
     return pc;
   }
 
@@ -4058,7 +4058,7 @@ function ffCatalogRender(){
     sims.innerHTML='<div style="padding:12px;border:1px dashed var(--border);border-radius:8px;color:var(--gray);font-size:13px">Nenhuma simulação no histórico.</div>';
   } else {
     sims.innerHTML=simList.map(s=>{
-      const tipo=s.type==='ambiente'?'Ambiente':'Quadro';
+      const tipo=s.type==='ambiente'?'Ambiente':(s.type==='montagem'?'Montagem':'Quadro');
       return '<div style="border:1px solid var(--border2);border-radius:8px;background:#fff;padding:8px">'+
         '<div style="display:flex;gap:8px">'+
           '<img src="'+_esc(s.preview||'')+'" alt="sim" style="width:92px;height:66px;object-fit:cover;border:1px solid var(--border2);border-radius:6px;background:#f5f5f5">'+
@@ -4406,6 +4406,92 @@ function ffCatalogSaveCurrentAmbiente(){
   toast('Simulação de ambiente salva.');
 }
 
+function ffCatalogSaveCurrentMontagem(){
+  ffCatalogInit();
+  const workArea=document.getElementById('mWorkArea');
+  if(!workArea||workArea.children.length===0){ toast('Adicione imagens na Montagem primeiro.'); return; }
+  // Renderiza a composição num canvas off-screen (mesma lógica do baixarMontagem)
+  const cfg=montagemConfig||{};
+  const fitMode=cfg.fitMode==='cover'?'cover':'contain';
+  const pxPerCm=cfg.pxPerCm||10;
+  const baseW=(cfg.canvasWidthCm||100)*pxPerCm;
+  const baseH=(cfg.canvasHeightCm||70)*pxPerCm;
+  const framePx=(cfg.frameSizeCm||2)*pxPerCm;
+  const ppPx=(cfg.ppSizeCm||5)*pxPerCm;
+  const offCanvas=document.createElement('canvas');
+  offCanvas.width=baseW+(framePx*2);
+  offCanvas.height=baseH+(framePx*2);
+  const ctx=offCanvas.getContext('2d');
+  ctx.fillStyle=cfg.frameColor||'#000000';
+  ctx.fillRect(0,0,offCanvas.width,offCanvas.height);
+  ctx.fillStyle=cfg.ppColor||'#FFFFFF';
+  ctx.fillRect(framePx,framePx,baseW,baseH);
+  const workX=framePx+ppPx;
+  const workY=framePx+ppPx;
+  const clipW=baseW-(ppPx*2);
+  const clipH=baseH-(ppPx*2);
+  const images=Array.from(workArea.children);
+  images.sort((a,b)=>parseInt(a.style.zIndex||0)-parseInt(b.style.zIndex||0));
+  images.forEach(wrap=>{
+    const img=wrap.querySelector('img');
+    if(!img) return;
+    const left=parseFloat(wrap.style.left)||0;
+    const top=parseFloat(wrap.style.top)||0;
+    const width=parseFloat(wrap.style.width)||0;
+    const height=parseFloat(wrap.style.height)||0;
+    const safeW=Math.max(1,width);
+    const safeH=Math.max(1,height);
+    const wrapFitMode=((wrap&&wrap.dataset&&wrap.dataset.fitMode)==='cover')?'cover':fitMode;
+    const scale=wrapFitMode==='cover'
+      ? Math.max(safeW/img.naturalWidth, safeH/img.naturalHeight)
+      : Math.min(safeW/img.naturalWidth, safeH/img.naturalHeight);
+    const drawW=img.naturalWidth*scale;
+    const drawH=img.naturalHeight*scale;
+    const drawX=workX+left+((safeW-drawW)/2);
+    const drawY=workY+top+((safeH-drawH)/2);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(workX,workY,clipW,clipH); ctx.clip();
+    ctx.drawImage(img,0,0,img.naturalWidth,img.naturalHeight,drawX,drawY,drawW,drawH);
+    ctx.restore();
+  });
+  const photos=images.map(wrap=>{
+    const img=wrap.querySelector('img');
+    return {
+      src:(img&&img.src)||'',
+      left:parseFloat(wrap.style.left)||0,
+      top:parseFloat(wrap.style.top)||0,
+      width:parseFloat(wrap.style.width)||0,
+      height:parseFloat(wrap.style.height)||0,
+      zIndex:parseInt(wrap.style.zIndex||0,10)||0,
+      fitMode:((wrap&&wrap.dataset&&wrap.dataset.fitMode)==='cover')?'cover':'contain',
+    };
+  }).filter(p=>p.src);
+  const preview=offCanvas.toDataURL('image/jpeg',0.76);
+  _ffCatalogData.sims.push({
+    id:_ffCatalogId('sim'),
+    type:'montagem',
+    title:'Montagem '+(new Date().toLocaleString('pt-BR')),
+    preview,
+    cfg:{
+      montageVersion:1,
+      previewSrc:preview,
+      canvasWidthCm:cfg.canvasWidthCm,
+      canvasHeightCm:cfg.canvasHeightCm,
+      ppSizeCm:cfg.ppSizeCm,
+      ppColor:cfg.ppColor,
+      frameSizeCm:cfg.frameSizeCm,
+      frameColor:cfg.frameColor,
+      fitMode,
+      pxPerCm:cfg.pxPerCm,
+      photos,
+    },
+    createdAt:new Date().toISOString(),
+  });
+  if(!_ffCatalogPersist()) return;
+  ffCatalogRender();
+  toast('Montagem salva na Biblioteca.');
+}
+
 async function ffCatalogOpenSimulation(simId){
   ffCatalogInit();
   const sim=(_ffCatalogData.sims||[]).find(s=>s.id===simId);
@@ -4444,6 +4530,66 @@ async function ffCatalogOpenSimulation(simId){
       if(cfg.bgColor){ sqBgColor=cfg.bgColor; const p=document.getElementById('sqBgPicker'); if(p) p.value=cfg.bgColor; }
       renderFrame();
       toast('Simulação de quadro reaberta.');
+      return;
+    }
+
+    if(sim.type==='montagem'){
+      const cfg=sim.cfg||{};
+      switchTab('montagem');
+
+      const controls=document.getElementById('mControls');
+      if(controls) controls.style.display='block';
+
+      if(cfg.canvasWidthCm!==undefined) document.getElementById('mCanvasWidth').value=cfg.canvasWidthCm;
+      if(cfg.canvasHeightCm!==undefined) document.getElementById('mCanvasHeight').value=cfg.canvasHeightCm;
+      if(cfg.ppSizeCm!==undefined) document.getElementById('mPpSize').value=cfg.ppSizeCm;
+      if(cfg.frameSizeCm!==undefined) document.getElementById('mFrameSize').value=cfg.frameSizeCm;
+      const fitInput=document.getElementById('mFitMode');
+      if(fitInput) fitInput.value=(cfg.fitMode==='cover'?'cover':'contain');
+
+      if(typeof setMontagemPpColor==='function' && cfg.ppColor){
+        const ppSwatch=[...document.querySelectorAll('#mPpColorList .pp-swatch')]
+          .find(s=>String(s.getAttribute('style')||'').toLowerCase().includes(String(cfg.ppColor).toLowerCase()));
+        setMontagemPpColor(cfg.ppColor, ppSwatch||null);
+      }
+      if(typeof setMontagemFrameColor==='function' && cfg.frameColor){
+        const frameSwatch=[...document.querySelectorAll('#mFrameColorList .pp-swatch')]
+          .find(s=>String(s.getAttribute('style')||'').toLowerCase().includes(String(cfg.frameColor).toLowerCase()));
+        setMontagemFrameColor(cfg.frameColor, frameSwatch||null);
+      }
+
+      if(typeof updateMontagemBase==='function') updateMontagemBase();
+
+      const workArea=document.getElementById('mWorkArea');
+      if(!workArea) throw new Error('Área de montagem indisponível.');
+      workArea.innerHTML='';
+
+      if(Array.isArray(cfg.photos) && cfg.photos.length && typeof addImageToWorkArea==='function'){
+        const sorted=[...cfg.photos].sort((a,b)=>(a.zIndex||0)-(b.zIndex||0));
+        sorted.forEach(p=>{
+          if(!p||!p.src) return;
+          addImageToWorkArea(p.src);
+          const el=workArea.lastElementChild;
+          if(!el) return;
+          el.style.left=`${Math.max(0,Number(p.left)||0)}px`;
+          el.style.top=`${Math.max(0,Number(p.top)||0)}px`;
+          if(Number.isFinite(Number(p.width)) && Number(p.width)>0) el.style.width=`${Number(p.width)}px`;
+          if(Number.isFinite(Number(p.height)) && Number(p.height)>0) el.style.height=`${Number(p.height)}px`;
+          if(Number.isFinite(Number(p.zIndex))) el.style.zIndex=String(Number(p.zIndex));
+          const img=el.querySelector('img');
+          const fitMode=(p.fitMode==='cover')?'cover':'contain';
+          el.dataset.fitMode=fitMode;
+          if(img){
+            img.style.objectFit=fitMode;
+            img.style.background=fitMode==='contain'?'#FFFFFF':'transparent';
+          }
+        });
+      } else {
+        throw new Error('Esta montagem foi salva sem fotos individuais (versão antiga). Monte novamente e salve de novo para restaurar item por item.');
+      }
+
+      if(typeof selectElement==='function') selectElement(null);
+      toast('Montagem reaberta.');
       return;
     }
 
@@ -4532,7 +4678,7 @@ function ffCatalogSaveSimulationToCatalog(simId){
     return;
   }
 
-  const tipoLabel=sim.type==='ambiente'?'Ambiente':'Quadro';
+  const tipoLabel=sim.type==='ambiente'?'Ambiente':(sim.type==='montagem'?'Montagem':'Quadro');
   const created=_fmtDataHora(sim.createdAt);
   _ffCatalogData.items.push({
     id:_ffCatalogId('item'),

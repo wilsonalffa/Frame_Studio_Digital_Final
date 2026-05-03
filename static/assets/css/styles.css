@@ -346,3 +346,50 @@ footer{background:var(--brown);border-top:2px solid var(--red-main);margin-top:a
 .modal-close:hover{background:var(--cream2);color:var(--brown)}
 .modal-body{padding:24px;text-align:center}
 #largePreviewCanvas{max-width:100%;max-height:60vh;border-radius:4px;border:1px solid var(--border)}
+
+/* ===== MONTAGEM MULTI-FOTOS ===== */
+.m-img-wrap {
+    cursor: move;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+    box-sizing: border-box;
+}
+.m-img-wrap.selected {
+    outline: 2px dashed var(--gold);
+}
+.m-resize-handle {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: var(--white);
+    border: 2px solid var(--gold);
+    border-radius: 50%;
+    display: none;
+    z-index: 10;
+}
+.m-img-wrap.selected .m-resize-handle {
+    display: block;
+}
+.m-resize-handle.tl { top: -6px; left: -6px; cursor: nwse-resize; }
+.m-resize-handle.tr { top: -6px; right: -6px; cursor: nesw-resize; }
+.m-resize-handle.bl { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.m-resize-handle.br { bottom: -6px; right: -6px; cursor: nwse-resize; }
+
+.m-del-btn {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    width: 24px;
+    height: 24px;
+    background: #B22222;
+    color: white;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 24px;
+    font-size: 12px;
+    cursor: pointer;
+    display: none;
+    z-index: 11;
+}
+.m-img-wrap.selected .m-del-btn {
+    display: block;
+}
