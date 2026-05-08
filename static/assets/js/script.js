@@ -188,6 +188,43 @@ function switchTab(id,btn){
   if(id==='admin' && typeof adminDashboardLoad==='function'){
     adminDashboardLoad();
   }
+
+  const activeDesktopNav=document.querySelector('header nav .nav-item.active');
+  if(activeDesktopNav){
+    activeDesktopNav.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'nearest' });
+  }
+  if(typeof updateNavScrollControls==='function') updateNavScrollControls();
+}
+
+function _getDesktopHeaderNav(){
+  return document.querySelector('header nav');
+}
+
+function scrollNavTabs(direction){
+  const nav=_getDesktopHeaderNav();
+  if(!nav) return;
+  const step=Math.max(180,Math.round(nav.clientWidth*0.5));
+  nav.scrollBy({ left:(direction<0?-step:step), behavior:'smooth' });
+  setTimeout(updateNavScrollControls,220);
+}
+
+function updateNavScrollControls(){
+  const nav=_getDesktopHeaderNav();
+  const controls=document.getElementById('navScrollControls');
+  const leftBtn=document.getElementById('navScrollLeft');
+  const rightBtn=document.getElementById('navScrollRight');
+  if(!nav||!controls||!leftBtn||!rightBtn) return;
+
+  if(window.matchMedia('(max-width: 900px)').matches){
+    controls.style.display='none';
+    return;
+  }
+
+  const maxLeft=Math.max(0,nav.scrollWidth-nav.clientWidth);
+  const hasOverflow=maxLeft>2;
+  controls.style.display=hasOverflow?'flex':'none';
+  leftBtn.disabled=!hasOverflow||nav.scrollLeft<=2;
+  rightBtn.disabled=!hasOverflow||nav.scrollLeft>=maxLeft-2;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -222,8 +259,20 @@ function dod(e,zid,type){
 function loadQ(e){ loadImgFile(e.target.files[0],'q'); }
 function loadC(e){ loadImgFile(e.target.files[0],'c'); }
 
+function _extractCmSizeFromFileName(name){
+  if(!name) return null;
+  const match=String(name).match(/(\d+(?:[.,]\d+)?)\s*[xX]\s*(\d+(?:[.,]\d+)?)\s*cm\b/i);
+  if(!match) return null;
+  const w=parseFloat(match[1].replace(',','.'));
+  const h=parseFloat(match[2].replace(',','.'));
+  if(!validatePositiveFrameValue(w)||!validatePositiveFrameValue(h)) return null;
+  if(w<1||w>500||h<1||h>500) return null;
+  return { w, h };
+}
+
 function loadImgFile(file,type){
   if(!file) return;
+  const inferredSize=(type==='q')?_extractCmSizeFromFileName(file.name):null;
   if(file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf')){
     loadPDF(file,type); return;
   }
@@ -231,7 +280,12 @@ function loadImgFile(file,type){
     const imgEl=new Image();
     imgEl.onload=()=>{
       const d2={img:imgEl,file,w:imgEl.naturalWidth,h:imgEl.naturalHeight};
-      if(type==='q'){ qImg=d2; showQ(); }
+      if(type==='q'){
+        customW=inferredSize?inferredSize.w:null;
+        customH=inferredSize?inferredSize.h:null;
+        qImg=d2;
+        showQ();
+      }
       else if(type==='sq'){ sqImg=d2; showSQ(); }
       else           { cImg=d2; showC(); }
     };
@@ -392,6 +446,7 @@ function qiUpdateMeta(){
     parts.push('Interacao: alcas e controles H/V');
     info.textContent=parts.join('  ·  ');
   }
+  qiUpdateExportPresetInfo();
 }
 
 function qiSetMatColor(color, idx){
@@ -405,32 +460,66 @@ function qiSetMatColor(color, idx){
   qiRenderDesigner();
 }
 
-function qiBuildExportCanvas(){
-  if(!qImg||!_qiValidSize()) return null;
-  const { w: wCm, h: hCm }=_qiCurrentSize();
-  const out=document.createElement('canvas');
+function qiGetExportSpec(){
   const dpi=300;
   const maxPx=10000;
-  let outW=Math.max(1,Math.round((wCm/2.54)*dpi));
-  let outH=Math.max(1,Math.round((hCm/2.54)*dpi));
+  const { w: wCm, h: hCm }=_qiCurrentSize();
+  if(!validatePositiveFrameValue(wCm)||!validatePositiveFrameValue(hCm)) return null;
+
+  const targetW=Math.max(1,Math.round((wCm/2.54)*dpi));
+  const targetH=Math.max(1,Math.round((hCm/2.54)*dpi));
+  let outW=targetW;
+  let outH=targetH;
+  let scaled=false;
+
   const maxSide=Math.max(outW,outH);
   if(maxSide>maxPx){
     const ratio=maxPx/maxSide;
     outW=Math.max(1,Math.round(outW*ratio));
     outH=Math.max(1,Math.round(outH*ratio));
+    scaled=true;
   }
+
+  const dpiW=(outW*2.54)/wCm;
+  const dpiH=(outH*2.54)/hCm;
+  const effectiveDpi=Math.round(Math.min(dpiW,dpiH));
+  return { wCm, hCm, dpi, targetW, targetH, outW, outH, scaled, effectiveDpi };
+}
+
+function qiUpdateExportPresetInfo(){
+  const el=document.getElementById('qiExportSpec');
+  if(!el) return;
+  const spec=qiGetExportSpec();
+  if(!spec){
+    el.textContent='Defina largura e altura para ver a saida exata da exportacao.';
+    return;
+  }
+  const area=`${_qiRound(spec.wCm)} x ${_qiRound(spec.hCm)} cm`;
+  const px=`${spec.outW.toLocaleString('pt-BR')} x ${spec.outH.toLocaleString('pt-BR')} px`;
+  if(spec.scaled){
+    el.textContent=`Saida: ${area} · ${px} · ${spec.effectiveDpi} DPI efetivo (limite tecnico de 10.000 px aplicado).`;
+    return;
+  }
+  el.textContent=`Saida: ${area} · ${px} · ${spec.dpi} DPI.`;
+}
+
+function qiBuildExportCanvas(){
+  if(!qImg||!_qiValidSize()) return null;
+  const spec=qiGetExportSpec();
+  if(!spec) return null;
+  const out=document.createElement('canvas');
+  const outW=spec.outW;
+  const outH=spec.outH;
   out.width=outW;
   out.height=outH;
   const ctx=out.getContext('2d');
   ctx.fillStyle=qiMatColor;
   ctx.fillRect(0,0,outW,outH);
-
   const srcW=qImg.img.naturalWidth||qImg.img.width;
   const srcH=qImg.img.naturalHeight||qImg.img.height;
   const baseScale=(qiFitMode==='cover')?Math.max(outW/srcW,outH/srcH):Math.min(outW/srcW,outH/srcH);
   const drawW=Math.max(1,srcW*baseScale*qiImageScaleX);
   const drawH=Math.max(1,srcH*baseScale*qiImageScaleY);
-
   const drawX=(outW-drawW)/2;
   const drawY=(outH-drawH)/2;
   ctx.drawImage(qImg.img,drawX,drawY,drawW,drawH);
@@ -441,12 +530,24 @@ function qiSaveImage(){
   if(!qImg) return toast('Carregue uma imagem primeiro.');
   const out=qiBuildExportCanvas();
   if(!out) return toast('Defina largura e altura válidas para salvar.');
+  const spec=qiGetExportSpec();
+  if(spec&&spec.scaled){
+    toast(`Exportacao ajustada para ${spec.effectiveDpi} DPI por limite tecnico de 10.000 px.`);
+  }
+  const { w, h }=_qiCurrentSize();
+  const safeBase=(qImg.file?.name||'fastframe')
+    .replace(/\.[^.]+$/,'')
+    .replace(/[^a-zA-Z0-9\-_]+/g,'-')
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'')
+    .toLowerCase() || 'fastframe';
+  const suggestedName=`${safeBase}-${_qiRound(w,1)}x${_qiRound(h,1)}cm-enquadrada`;
   askFileName('enquadrada', (finalName) => {
     out.toBlob((blob)=>{
       if(!blob){ toast('Falha ao gerar a imagem.'); return; }
       _saveAs(blob, finalName, 'image/jpeg').then(()=>toast('Imagem salva!'));
     }, 'image/jpeg', 0.95);
-  });
+  }, suggestedName);
 }
 
 function _qiSyncLegacyScale(){
@@ -4872,6 +4973,14 @@ document.addEventListener('DOMContentLoaded',()=>{
       if(e.target===mobileNav) toggleMobileNav();
     });
   }
+
+  const desktopNav=_getDesktopHeaderNav();
+  if(desktopNav){
+    desktopNav.addEventListener('scroll',updateNavScrollControls,{passive:true});
+  }
+  window.addEventListener('resize',updateNavScrollControls);
+  window.addEventListener('load',updateNavScrollControls);
+  setTimeout(updateNavScrollControls,80);
 });
 
 // (persistência de imagem entre abas integrada em switchTab)

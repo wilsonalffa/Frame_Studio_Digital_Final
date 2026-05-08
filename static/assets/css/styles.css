@@ -62,7 +62,7 @@ body{background:var(--cream);color:var(--brown);font-family:'Raleway',sans-serif
 
 /* ===== CABEÇALHO ===== */
 header{background:var(--white);border-bottom:1px solid var(--border);padding:0 48px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(26,48,81,.08)}
-.hinner{display:flex;align-items:center;justify-content:space-between;height:72px}
+.hinner{display:flex;align-items:center;justify-content:space-between;height:72px;gap:12px;min-width:0}
 
 /* ===== LOGO ===== */
 .logo-wrap{display:flex;align-items:center;gap:14px}
@@ -72,11 +72,19 @@ header{background:var(--white);border-bottom:1px solid var(--border);padding:0 4
 .logo-sub{font-size:10px;font-weight:400;color:var(--gray);letter-spacing:2px;text-transform:uppercase}
 
 /* ===== NAVEGAÇÃO ===== */
-nav{display:flex;align-items:center;height:72px;flex-wrap:wrap}
-.nav-item{position:relative;height:72px;display:flex;align-items:center;padding:0 18px;font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--brown2);cursor:pointer;border:none;background:none;transition:color .2s}
+nav{display:flex;align-items:center;height:72px;flex:1;min-width:0;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:var(--border) transparent;-webkit-overflow-scrolling:touch}
+nav::-webkit-scrollbar{height:6px}
+nav::-webkit-scrollbar-track{background:transparent}
+nav::-webkit-scrollbar-thumb{background:var(--border);border-radius:999px}
+nav:hover::-webkit-scrollbar-thumb{background:var(--gold)}
+.nav-item{position:relative;height:72px;display:flex;align-items:center;padding:0 18px;font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--brown2);cursor:pointer;border:none;background:none;transition:color .2s;flex:0 0 auto;white-space:nowrap}
 .nav-item::after{content:'';position:absolute;bottom:0;left:18px;right:18px;height:3px;background:var(--gold);transform:scaleX(0);transition:transform .3s}
 .nav-item:hover,.nav-item.active{color:var(--gold)}
 .nav-item:hover::after,.nav-item.active::after{transform:scaleX(1)}
+.nav-scroll-controls{display:flex;align-items:center;gap:6px;margin-left:8px;flex:0 0 auto}
+.nav-scroll-btn{width:30px;height:30px;border:1px solid var(--border);border-radius:999px;background:var(--white);color:var(--brown2);cursor:pointer;line-height:1;font-size:11px;display:flex;align-items:center;justify-content:center;transition:all .2s ease}
+.nav-scroll-btn:hover:not(:disabled){border-color:var(--gold);color:var(--gold);background:#FFF8F8}
+.nav-scroll-btn:disabled{opacity:.35;cursor:not-allowed}
 .header-cta{background:var(--gold);color:var(--white);border:none;padding:10px 22px;font-family:'Raleway',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;transition:background .2s;border-radius:3px}
 .header-cta:hover{background:var(--brown)}
 
@@ -329,6 +337,7 @@ footer{background:var(--brown);border-top:2px solid var(--red-main);margin-top:a
   .finfo{text-align:left}
   .app-shell{padding:24px 18px 34px;display:block}
   .app-sidebar{display:none}
+  .nav-scroll-controls{display:none}
 }
 
 /* ===== SCROLLBAR ===== */

@@ -742,6 +742,12 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
         <button class="nav-item" data-nav="catalogo" onclick="switchTab('catalogo',this)">Catálogo</button>
         <button class="nav-item" data-nav="clientes" onclick="switchTab('clientes',this)">Clientes</button>
       </nav>
+      <div class="nav-scroll-controls" id="navScrollControls" aria-label="Controles das abas">
+        <button class="nav-scroll-btn" id="navScrollLeft" type="button" onclick="scrollNavTabs(-1)"
+          aria-label="Rolar abas para esquerda">&#9664;</button>
+        <button class="nav-scroll-btn" id="navScrollRight" type="button" onclick="scrollNavTabs(1)"
+          aria-label="Rolar abas para direita">&#9654;</button>
+      </div>
       <div style="display:flex;align-items:center;gap:10px;margin-left:auto">
         <!-- BOTAO ORCAMENTO - desabilitado (uso futuro)
       <button class="header-cta" onclick="abrirOrcamento()">Fazer Orçamento</button>
@@ -991,6 +997,14 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                           onclick="qiSetMatColor('#111111',4)" title="Preto"></button>
                         <input type="color" id="qiMatColorPicker" value="#FFFFFF" oninput="qiSetMatColor(this.value,-1)"
                           style="width:34px;height:34px;border:1px solid var(--border);border-radius:8px;cursor:pointer;padding:2px;background:#fff">
+                      </div>
+                    </div>
+                    <div
+                      style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:rgba(255,255,255,0.45)">
+                      <div class="sq-block-label" style="margin-bottom:6px">Exportação</div>
+                      <div style="font-size:11px;color:var(--brown3);font-weight:700;letter-spacing:.04em">JPEG</div>
+                      <div id="qiExportSpec" style="font-size:11px;color:var(--gray);line-height:1.6;margin-top:4px">
+                        Defina largura e altura para ver a saída exata da exportação.
                       </div>
                     </div>
                     <div class="qi-actions">
