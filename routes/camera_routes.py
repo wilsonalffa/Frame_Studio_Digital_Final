@@ -3,6 +3,7 @@ import uuid
 import json
 from io import BytesIO
 from datetime import datetime, timedelta
+import os
 from PIL import Image
 from flask import Blueprint, jsonify, request, render_template, session
 from flask_socketio import emit, join_room, leave_room
@@ -14,13 +15,22 @@ from core.db import get_db, now_iso
 from core.socket_ext import socketio, emit_camera_presence
 from core.memory_stores import (
     active_sessions, socket_clients, camera_latest_frames, 
-    touch_camera_heartbeat, get_camera_presence_snapshot, normalize_socket_device
+    touch_camera_heartbeat, get_camera_presence_snapshot, normalize_socket_device,
+    prune_memory_stores,
 )
 
 camera_bp = Blueprint('camera', __name__)
 
+MAX_UPLOAD_B64_CHARS = int(os.environ.get('MAX_UPLOAD_B64_CHARS', 12 * 1024 * 1024))
+MAX_UPLOAD_BYTES = int(os.environ.get('MAX_UPLOAD_BYTES', 8 * 1024 * 1024))
+
+
+def _public_frame_payload(frame):
+    return {k: v for k, v in frame.items() if not str(k).startswith('_')}
+
 @socketio.on('connect')
 def handle_connect():
+    prune_memory_stores()
     user = get_authenticated_user()
     user_id = user['id'] if user else session.get('user_id')
     store_id = user['store_id'] if user else session.get('store_id')
@@ -46,6 +56,7 @@ def handle_connect():
         'store_id': store_id,
         'user_id': user_id,
         'device_type': device_type,
+        'connected_at': datetime.utcnow(),
     }
 
     join_room(str(store_id))
@@ -80,6 +91,7 @@ def handle_disconnect():
 @login_required
 def upload_frame():
     try:
+        prune_memory_stores()
         store_id = current_store_id()
         user_id = current_user_id()
         data = request.get_json()
@@ -90,15 +102,25 @@ def upload_frame():
         raw_b64 = data['image']
         mime_type = data.get('mimeType', 'image/jpeg')
 
+        if len(raw_b64) > MAX_UPLOAD_B64_CHARS:
+            return jsonify({'error': 'Imagem excede o tamanho permitido.'}), 413
+
         image_bytes = base64.b64decode(raw_b64.split(',')[-1])
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            return jsonify({'error': 'Imagem excede o tamanho permitido apos decodificacao.'}), 413
+
         img = Image.open(BytesIO(image_bytes))
+        img = img.convert('RGB')
 
         if img.width > 2000 or img.height > 2000:
             img.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
 
-        output = BytesIO()
-        img.save(output, format='JPEG', quality=85, optimize=True)
-        compressed_b64 = base64.b64encode(output.getvalue()).decode('utf-8')
+        with BytesIO() as output:
+            img.save(output, format='JPEG', quality=85, optimize=True)
+            compressed_b64 = base64.b64encode(output.getvalue()).decode('utf-8')
+
+        del image_bytes
+        del raw_b64
 
         agora = now_iso()
         frame_id = str(uuid.uuid4())[:12]
@@ -117,6 +139,7 @@ def upload_frame():
             'timestamp': agora,
             'width': img.width,
             'height': img.height,
+            '_cached_at': datetime.utcnow(),
         }
 
         # Salva apenas metadados no DB (sem image_b64) para evitar egress excessivo no Supabase.
@@ -203,6 +226,7 @@ def camera_presence_status():
 @camera_bp.route('/api/camera/latest-frame', methods=['GET'])
 @login_required
 def latest_camera_frame():
+    prune_memory_stores()
     store_id = current_store_id()
     after_id = str(request.args.get('after_id') or '').strip()
     # Usa cache em memória como fonte primária para evitar egress do Supabase.
@@ -211,7 +235,7 @@ def latest_camera_frame():
     if mem_frame:
         if after_id and mem_frame.get('frame_id') == after_id:
             return jsonify({'ok': True, 'frame': None})
-        return jsonify({'ok': True, 'frame': mem_frame})
+        return jsonify({'ok': True, 'frame': _public_frame_payload(mem_frame)})
 
     # Fallback: busca metadados do DB (sem imagem) para checar se existe registro recente
     try:

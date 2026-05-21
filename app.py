@@ -9,6 +9,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-fastframe-2026-fallback')
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.config['IS_PROD'] = IS_PROD
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 25 * 1024 * 1024))
 
 app.config.update(
     SESSION_COOKIE_SECURE=IS_PROD,

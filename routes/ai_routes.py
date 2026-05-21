@@ -7,6 +7,10 @@ from core.auth import login_required
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY', '')
 GEMINI_MODEL = (os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash') or 'gemini-2.5-flash').replace('models/', '')
+MAX_CHAT_MESSAGES = int(os.environ.get('MAX_CHAT_MESSAGES', 20))
+MAX_CHAT_TEXT_CHARS = int(os.environ.get('MAX_CHAT_TEXT_CHARS', 16000))
+MAX_CHAT_PAYLOAD_BYTES = int(os.environ.get('MAX_CHAT_PAYLOAD_BYTES', 2 * 1024 * 1024))
+MAX_IMAGE_B64_CHARS = int(os.environ.get('MAX_IMAGE_B64_CHARS', 8 * 1024 * 1024))
 
 ai_bp = Blueprint('ai', __name__)
 
@@ -17,17 +21,21 @@ def chat_proxy():
         return jsonify({'error': 'Chave da IA nao configurada. Defina GEMINI_API_KEY ou GOOGLE_API_KEY no servidor.'}), 500
 
     try:
-        body = request.get_json()
+        body = request.get_json(silent=True)
         if not body:
             return jsonify({'error': 'Corpo invalido.'}), 400
 
-        system_prompt = body.get('system', '')
+        system_prompt = str(body.get('system', ''))[:2000]
         messages = body.get('messages', [])
+        if not isinstance(messages, list):
+            return jsonify({'error': 'Campo messages invalido.'}), 400
+
+        messages = messages[-MAX_CHAT_MESSAGES:]
 
         gemini_contents = []
         for i, msg in enumerate(messages):
-            role = 'user' if msg['role'] == 'user' else 'model'
-            text = msg['content']
+            role = 'user' if msg.get('role') == 'user' else 'model'
+            text = str(msg.get('content', ''))[:MAX_CHAT_TEXT_CHARS]
             if i == 0 and role == 'user' and system_prompt:
                 text = system_prompt + '\n\n---\n\n' + text
             gemini_contents.append({
@@ -42,6 +50,9 @@ def chat_proxy():
                 'temperature': 0.7
             }
         }).encode('utf-8')
+
+        if len(payload) > MAX_CHAT_PAYLOAD_BYTES:
+            return jsonify({'error': 'Payload de chat excede o limite permitido.'}), 413
 
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}'
 
@@ -70,11 +81,13 @@ def describe_image():
         return jsonify({'error': 'Chave da IA nao configurada. Defina GEMINI_API_KEY ou GOOGLE_API_KEY.'}), 500
 
     try:
-        body = request.get_json()
+        body = request.get_json(silent=True)
         if not body or 'image' not in body:
             return jsonify({'error': 'Imagem nao enviada.'}), 400
 
-        image_b64 = body['image']
+        image_b64 = str(body['image'])
+        if len(image_b64) > MAX_IMAGE_B64_CHARS:
+            return jsonify({'error': 'Imagem excede o limite permitido.'}), 413
         mime_type = body.get('mimeType', 'image/jpeg')
 
         payload = json.dumps({
