@@ -69,6 +69,9 @@ let qiDimensionSync=false;
 let qiRenderMetrics=null;
 let qiDragState=null;
 let qiMatColor='#FFFFFF';
+let _enhApplyTimer=null;
+let _enhApplyToken=0;
+let _qiRenderQueued=false;
 
 
 // ─────────────────────────────────────────────────────────
@@ -102,6 +105,17 @@ function askFileName(suffix, callback, customSuggestedName=null) {
     const base = (input.trim() || suggestion).replace(/[^a-zA-Z0-9\u00C0-\u00FF\s\-_]/g, '').replace(/\s+/g, '-').toLowerCase();
     callback(customSuggestedName ? base : (base + '-' + suffix));
   }
+}
+
+function suggestFileNameFromImage(img){
+  const base=(qImg?.file?.name||img?.alt||'fastframe')
+    .replace(/\.[^.]+$/,'')
+    .replace(/[^a-zA-Z0-9\-_]+/g,'-')
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'')
+    .toLowerCase() || 'fastframe';
+  askFileName._lastSuggested=base;
+  return base;
 }
 
 // Salva um Blob com janela nativa do sistema operacional
@@ -297,28 +311,56 @@ function loadImgFile(file,type){
 }
 
 function loadPDF(file,type){
-  const url=URL.createObjectURL(file);
-  const pdfImg=new Image();
-  pdfImg.onload=()=>{
-    _dispatchImg({img:pdfImg,file,w:pdfImg.naturalWidth||800,h:pdfImg.naturalHeight||600},type);
-    URL.revokeObjectURL(url);
-  };
-  pdfImg.onerror=()=>{
-    URL.revokeObjectURL(url);
+  const fallback=()=>{
     const c=document.createElement('canvas'); c.width=800; c.height=600;
     const ctx=c.getContext('2d');
     ctx.fillStyle='#F4F4F4'; ctx.fillRect(0,0,800,600);
     ctx.fillStyle='#1A3051'; ctx.font='bold 26px sans-serif'; ctx.textAlign='center';
     ctx.fillText('PDF: '+file.name,400,260);
     ctx.font='17px sans-serif'; ctx.fillStyle='#666';
-    ctx.fillText('Converta para JPG ou PNG para melhor resultado',400,310);
+    ctx.fillText('Nao foi possivel renderizar a primeira pagina.',400,310);
     c.toBlob(blob=>{
+      if(!blob) return toast('Falha ao abrir o PDF.');
       const fi=new Image();
       fi.onload=()=>{ _dispatchImg({img:fi,file,w:800,h:600},type); };
       fi.src=URL.createObjectURL(blob);
-    });
+    },'image/jpeg',0.92);
   };
-  pdfImg.src=url;
+
+  (async()=>{
+    if(!window.pdfjsLib){
+      fallback();
+      return;
+    }
+
+    try{
+      if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+        pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+
+      const data=new Uint8Array(await file.arrayBuffer());
+      const pdf=await pdfjsLib.getDocument({ data }).promise;
+      const page=await pdf.getPage(1);
+      const initialViewport=page.getViewport({ scale:1 });
+      const maxSide=2200;
+      const scale=Math.min(2.5, maxSide/Math.max(initialViewport.width, initialViewport.height)) || 1;
+      const viewport=page.getViewport({ scale });
+      const canvas=document.createElement('canvas');
+      canvas.width=Math.max(1,Math.round(viewport.width));
+      canvas.height=Math.max(1,Math.round(viewport.height));
+      await page.render({ canvasContext:canvas.getContext('2d'), viewport }).promise;
+
+      const imgEl=new Image();
+      imgEl.onload=()=>{
+        _dispatchImg({img:imgEl,file,w:imgEl.naturalWidth||canvas.width,h:imgEl.naturalHeight||canvas.height},type);
+      };
+      imgEl.onerror=fallback;
+      imgEl.src=canvas.toDataURL('image/jpeg',0.95);
+    }catch(err){
+      console.error('Falha ao abrir PDF', err);
+      fallback();
+    }
+  })();
 }
 
 // ─────────────────────────────────────────────────────────
@@ -789,6 +831,15 @@ function initQIDesignerInteractions(){
 }
 
 function qiRenderDesigner(){
+  if(_qiRenderQueued) return;
+  _qiRenderQueued=true;
+  requestAnimationFrame(()=>{
+    _qiRenderQueued=false;
+    _qiRenderDesignerNow();
+  });
+}
+
+function _qiRenderDesignerNow(){
   const canvas=document.getElementById('qiCanvas');
   const stage=document.getElementById('qiStage');
   if(!canvas||!stage||!qImg) return;
@@ -1279,34 +1330,29 @@ function ffAplicarComposicaoDivisaoNoAmbiente(showMsg=true){
 function buildDlRow(){
   const dr=document.getElementById('dlRow');
   const bleedBtns =
-    `<button class="dl-btn pri" onclick="dlBleed('pdf')">⬇ PDF com Sangria</button>`+
-    `<button class="dl-btn" onclick="dlBleed('jpg')">⬇ JPEG com Sangria</button>`;
+    `<button class="dl-btn pri" onclick="dlBleed('jpg')">⬇ JPEG com Sangria</button>`;
   if(splitOrient==='grid'){
     const n=gridCols*gridRows;
     let b='';
     for(let i=0;i<n;i++){
       const r=Math.floor(i/gridCols), c=i%gridCols;
-      b+=`<button class="dl-btn" onclick="dlPiece(${i},${n},'pdf')">⬇ L${r+1}C${c+1} PDF</button>`;
+      b+=`<button class="dl-btn pri" onclick="dlPiece(${i},${n},'jpg')">⬇ L${r+1}C${c+1} JPEG</button>`;
     }
-    b+=`<button class="dl-btn pri" onclick="dlAll('pdf')">⬇ Todos PDF</button>`;
-    b+=`<button class="dl-btn"     onclick="dlAll('jpg')">⬇ Todos JPEG</button>`;
+    b+=`<button class="dl-btn pri" onclick="dlAll('jpg')">⬇ Todos JPEG</button>`;
     b+=bleedBtns;
     dr.innerHTML=b;
   } else {
     const n=partWidths.length;
     if(n===1){
       dr.innerHTML=`
-        <button class="dl-btn pri" onclick="dlPiece(0,1,'pdf')">⬇ PDF</button>
-        <button class="dl-btn"     onclick="dlPiece(0,1,'jpg')">⬇ JPEG</button>
+        <button class="dl-btn pri" onclick="dlPiece(0,1,'jpg')">⬇ JPEG</button>
         ${bleedBtns}`;
     } else {
       let b='';
       for(let i=0;i<n;i++){
-        b+=`<button class="dl-btn" onclick="dlPiece(${i},${n},'pdf')">⬇ Parte ${i+1} PDF</button>`;
-        b+=`<button class="dl-btn" onclick="dlPiece(${i},${n},'jpg')">⬇ Parte ${i+1} JPEG</button>`;
+        b+=`<button class="dl-btn pri" onclick="dlPiece(${i},${n},'jpg')">⬇ Parte ${i+1} JPEG</button>`;
       }
-      b+=`<button class="dl-btn pri" onclick="dlAll('pdf')">⬇ Todos PDF</button>`;
-      b+=`<button class="dl-btn"     onclick="dlAll('jpg')">⬇ Todos JPEG</button>`;
+      b+=`<button class="dl-btn pri" onclick="dlAll('jpg')">⬇ Todos JPEG</button>`;
       b+=bleedBtns;
       dr.innerHTML=b;
     }
@@ -1405,9 +1451,58 @@ function dlAll(fmt){
 function applyBleed(){
   if(!cImg) return toast('Carregue uma imagem primeiro.');
   const{img,w:imgW,h:imgH}=cImg;
-  const DPI=300;
-  const BP=Math.round(5/2.54*DPI);   // 5cm a 300dpi em pixels
+  // A prévia não precisa de 300 DPI. Em tamanhos grandes isso estoura o limite
+  // de área do canvas do navegador e a imagem fica invisível.
+  const PREVIEW_DPI_BASE=96;
+  const BLEED_CM=5;
+  const MAX_PREVIEW_CANVAS_SIDE=16384;
+  const MAX_PREVIEW_CANVAS_AREA=260000000;
   const PIECE_GAP_PX=8;              // gap branco entre painéis no preview
+
+  const cmToPx=(cm,dpi)=>Math.max(1,Math.round((cm/2.54)*dpi));
+
+  function estimatePreviewBounds(dpi){
+    const bp=cmToPx(BLEED_CM,dpi);
+
+    if(splitOrient==='grid'){
+      const cols=gridCols, rows=gridRows;
+      const cellW=cmToPx(partWidths[0]||1,dpi)+bp*2;
+      const cellH=cmToPx(partHeights[0]||1,dpi)+bp*2;
+      return {
+        w:cols*cellW + PIECE_GAP_PX*(cols-1),
+        h:rows*cellH + PIECE_GAP_PX*(rows-1)
+      };
+    }
+
+    const n=partWidths.length;
+    if(n===1){
+      return {
+        w:cmToPx(partWidths[0]||1,dpi)+bp*2,
+        h:cmToPx(partHeights[0]||1,dpi)+bp*2
+      };
+    }
+
+    if(splitOrient==='h'){
+      const w=partWidths.reduce((acc,cm)=>acc + cmToPx(cm||1,dpi)+bp*2,0)+PIECE_GAP_PX*(n-1);
+      const h=cmToPx(partHeights[0]||1,dpi)+bp*2;
+      return { w, h };
+    }
+
+    const w=cmToPx(partWidths[0]||1,dpi)+bp*2;
+    const h=partHeights.reduce((acc,cm)=>acc + cmToPx(cm||1,dpi)+bp*2,0)+PIECE_GAP_PX*(n-1);
+    return { w, h };
+  }
+
+  let DPI=PREVIEW_DPI_BASE;
+  while(DPI>24){
+    const est=estimatePreviewBounds(DPI);
+    const tooLargeSide=est.w>MAX_PREVIEW_CANVAS_SIDE||est.h>MAX_PREVIEW_CANVAS_SIDE;
+    const tooLargeArea=(est.w*est.h)>MAX_PREVIEW_CANVAS_AREA;
+    if(!tooLargeSide&&!tooLargeArea) break;
+    DPI=Math.floor(DPI*0.85);
+  }
+
+  const BP=cmToPx(BLEED_CM,DPI);
 
   function buildPiece(srcX,srcY,srcW,srcH,sw,sh){
     const pc=document.createElement('canvas');
@@ -1447,8 +1542,8 @@ function applyBleed(){
     const cols=gridCols, rows=gridRows;
     for(let r=0;r<rows;r++){
       for(let c=0;c<cols;c++){
-        const outW=Math.round(partWidths[0]/2.54*DPI);
-        const outH=Math.round(partHeights[0]/2.54*DPI);
+        const outW=cmToPx(partWidths[0],DPI);
+        const outH=cmToPx(partHeights[0],DPI);
         const srcX=Math.round(c*imgW/cols), srcW=Math.round(imgW/cols);
         const srcY=Math.round(r*imgH/rows), srcH=Math.round(imgH/rows);
         pieces.push(buildPiece(srcX,srcY,srcW,srcH,outW,outH));
@@ -1469,12 +1564,12 @@ function applyBleed(){
     const n=partWidths.length;
     if(n===1){
       bigC=buildPiece(0,0,imgW,imgH,
-        Math.round(partWidths[0]/2.54*DPI),
-        Math.round(partHeights[0]/2.54*DPI));
+        cmToPx(partWidths[0],DPI),
+        cmToPx(partHeights[0],DPI));
     } else {
       for(let i=0;i<n;i++){
-        const outW=Math.round(partWidths[i]/2.54*DPI);
-        const outH=Math.round(partHeights[i]/2.54*DPI);
+        const outW=cmToPx(partWidths[i],DPI);
+        const outH=cmToPx(partHeights[i],DPI);
         const srcX=splitOrient==='h'?Math.round(i*imgW/n):0;
         const srcW=splitOrient==='h'?Math.round(imgW/n):imgW;
         const srcY=splitOrient==='v'?Math.round(i*imgH/n):0;
@@ -2360,19 +2455,28 @@ function updateScaleInfo(){
 
 function applyEnhancement(){
   if(!enhOrigCanvas) return;
-  const bright  =parseInt(document.getElementById('brightS').value);
-  const contrast=parseInt(document.getElementById('contrastS').value);
-  const sat     =parseInt(document.getElementById('satS').value);
-  const sharp   =parseInt(document.getElementById('sharpS').value);
-  const noise   =parseInt(document.getElementById('noiseS').value);
-  const temp    =parseInt(document.getElementById('tempS').value);
+  if(_enhApplyTimer){
+    clearTimeout(_enhApplyTimer);
+    _enhApplyTimer=null;
+  }
+  const token=++_enhApplyToken;
 
-  const progWrap=document.getElementById('enhProgress');
-  const progBar =document.getElementById('enhProgressBar');
-  const progLbl =document.getElementById('enhProgressLabel');
-  if(enhScale>1){ progWrap.style.display='block'; progLbl.textContent='Aumentando resolução…'; progBar.style.width='20%'; }
+  _enhApplyTimer=setTimeout(()=>{
+    if(token!==_enhApplyToken) return;
+    _enhApplyTimer=null;
 
-  setTimeout(()=>{
+    const bright  =parseInt(document.getElementById('brightS').value);
+    const contrast=parseInt(document.getElementById('contrastS').value);
+    const sat     =parseInt(document.getElementById('satS').value);
+    const sharp   =parseInt(document.getElementById('sharpS').value);
+    const noise   =parseInt(document.getElementById('noiseS').value);
+    const temp    =parseInt(document.getElementById('tempS').value);
+
+    const progWrap=document.getElementById('enhProgress');
+    const progBar =document.getElementById('enhProgressBar');
+    const progLbl =document.getElementById('enhProgressLabel');
+    if(enhScale>1){ progWrap.style.display='block'; progLbl.textContent='Aumentando resolução…'; progBar.style.width='20%'; }
+
     // Upscale bicúbico por passagens de 1.5×
     let cur=enhOrigCanvas;
     let cw=cur.width, ch=cur.height;
@@ -2462,7 +2566,7 @@ function applyEnhancement(){
     document.getElementById('enhAfterInfo').textContent=`${out.width.toLocaleString()} × ${out.height.toLocaleString()} px`;
 
     enhOrigCanvas._processed=out;
-  },30);
+  },90);
 }
 
 function applyBoxBlur(ctx,w,h){

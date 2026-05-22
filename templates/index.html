@@ -1106,14 +1106,10 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                     </div>
                   </div>
                 </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-                  <button class="btn" style="flex:1" onclick="applyEnhancement()">🔄 Aplicar</button>
-                  <button class="btn dark" style="flex:1" onclick="resetEnhSliders()">↺ Resetar</button>
-                </div>
-                <div style="display:flex;gap:8px;margin-top:8px">
-                  <button class="btn full" style="flex:1;margin-bottom:0" onclick="dlEnhanced('pdf')">⬇ Baixar
-                    PDF</button>
-                  <button class="btn full" style="flex:1;margin-bottom:0;background:var(--brown2)"
+                <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px">
+                  <button class="btn" style="width:100%;padding:10px 12px;font-size:11px" onclick="applyEnhancement()">🔄 Aplicar</button>
+                  <button class="btn dark" style="width:100%;padding:10px 12px;font-size:11px" onclick="resetEnhSliders()">↺ Resetar</button>
+                  <button class="btn" style="width:100%;padding:10px 12px;font-size:11px;background:var(--brown2)"
                     onclick="dlEnhanced('jpg')">⬇ Baixar JPEG</button>
                 </div>
               </div>
@@ -1278,12 +1274,12 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                 <div class="frame-stage" id="frameStage">
                   <canvas id="frameCanvas"></canvas>
                 </div>
-                <div style="margin-top:10px;display:flex;gap:8px">
-                  <button class="dl-btn pri" style="flex:1" onclick="dlFrame('pdf')">⬇ PDF</button>
-                  <button class="dl-btn" style="flex:1;background:#24497E;color:#fff;border-color:#24497E"
+                <div style="margin-top:10px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+                  <button class="dl-btn" style="width:100%;background:#24497E;color:#fff;border-color:#24497E"
                     onclick="dlFrame('jpg')">⬇ JPEG</button>
+                  <button class="btn" style="width:100%;margin-bottom:0"
+                    onclick="ffCatalogSaveCurrentQuadro()">💾 Salvar na Biblioteca</button>
                 </div>
-                <button class="btn" style="width:100%;margin-top:8px" onclick="ffCatalogSaveCurrentQuadro()">💾 Salvar na Biblioteca</button>
                 <button onclick="compartilharSimulacaoNoWhatsApp('quadro')"
                   style="width:100%;margin-top:8px;padding:11px;background:#128C7E;color:#fff;border:none;border-radius:6px;font-family:'Avenir','Nunito',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📲
                   WhatsApp + Imagem</button>
@@ -1499,12 +1495,12 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                 </div>
                 <canvas id="wallCanvas" style="display:none;cursor:default"></canvas>
               </div>
-              <div style="display:flex;gap:8px;margin-top:10px">
-                <button class="dl-btn pri" style="flex:1" onclick="dlWall('pdf')">⬇ PDF</button>
-                <button class="dl-btn" style="flex:1;background:#24497E;color:#fff;border-color:#24497E"
+              <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px">
+                <button class="dl-btn" style="width:100%;background:#24497E;color:#fff;border-color:#24497E"
                   onclick="dlWall('jpg')">⬇ JPEG</button>
+                <button class="btn" style="width:100%;margin-bottom:0"
+                  onclick="ffCatalogSaveCurrentAmbiente()">💾 Salvar na Biblioteca</button>
               </div>
-              <button class="btn" style="width:100%;margin-top:8px" onclick="ffCatalogSaveCurrentAmbiente()">💾 Salvar na Biblioteca</button>
               <button onclick="compartilharSimulacaoNoWhatsApp('ambiente')"
                 style="width:100%;margin-top:8px;padding:11px;background:#128C7E;color:#fff;border:none;border-radius:6px;font-family:'Avenir','Nunito',sans-serif;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">📲
                 WhatsApp + Imagem</button>
