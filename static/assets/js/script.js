@@ -280,7 +280,13 @@ function _extractCmSizeFromFileName(name){
     .replace(/[_-]+/g,' ')
     .replace(/\s+/g,' ')
     .trim();
-  const match=normalized.match(/(\d+(?:[.,]\d+)?)\s*(?:x|X|×)\s*(\d+(?:[.,]\d+)?)(?:\s*cm)?\b/i);
+
+  // Com "cm" explicito, aceita formatos amplos.
+  let match=normalized.match(/(?:^|[^a-zA-Z0-9])(\d+(?:[.,]\d+)?)\s*(?:x|X|×)\s*(\d+(?:[.,]\d+)?)\s*cm\b/i);
+  // Sem "cm", evita capturar trechos colados em palavras (ex.: "de2x3").
+  if(!match){
+    match=normalized.match(/(?:^|[^a-zA-Z0-9])(\d+(?:[.,]\d+)?)\s*(?:x|X|×)\s*(\d+(?:[.,]\d+)?)(?=$|[^a-zA-Z0-9])/i);
+  }
   if(!match) return null;
   const w=parseFloat(match[1].replace(',','.'));
   const h=parseFloat(match[2].replace(',','.'));
@@ -1436,20 +1442,38 @@ function _fitExportSize(pxW, pxH, maxPixels=28000000, maxSide=10000){
   return { w, h };
 }
 
+function _splitEnsureSizeTagInFileName(baseName,wCm,hCm){
+  const safeBase=String(baseName||'fastframe')
+    .replace(/\.[^.]+$/,'')
+    .replace(/[^a-zA-Z0-9\u00C0-\u00FF\s\-_]/g,'')
+    .replace(/\s+/g,'-')
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'')
+    .toLowerCase() || 'fastframe';
+
+  if(/\d+(?:[.,]\d+)?\s*[xX×]\s*\d+(?:[.,]\d+)?\s*cm\b/i.test(safeBase)) return safeBase;
+  const sizeTag=`${_qiRound(wCm,1)}x${_qiRound(hCm,1)}cm`;
+  return `${safeBase}-${sizeTag}`;
+}
+
 function dlPiece(idx,total,fmt){
   if(!cImg) return;
   const{img,w:imgW,h:imgH}=cImg;
   const DPI=300;
-  let pW,pH,srcX,srcY,srcW,srcH,name;
+  let pW,pH,srcX,srcY,srcW,srcH,name,pieceWcm,pieceHcm;
   if(splitOrient==='grid'){
     const cols=gridCols, rows=gridRows;
     const r=Math.floor(idx/cols), c=idx%cols;
+    pieceWcm=partWidths[0];
+    pieceHcm=partHeights[0];
     pW=Math.round(partWidths[0]/2.54*DPI);
     pH=Math.round(partHeights[0]/2.54*DPI);
     srcX=Math.round(c*imgW/cols); srcW=Math.round(imgW/cols);
     srcY=Math.round(r*imgH/rows); srcH=Math.round(imgH/rows);
     name=`fastframe-L${r+1}C${c+1}de${rows}x${cols}`;
   } else {
+    pieceWcm=partWidths[idx];
+    pieceHcm=partHeights[idx];
     pW=Math.round(partWidths[idx]/2.54*DPI);
     pH=Math.round(partHeights[idx]/2.54*DPI);
     const bounds=_splitSrcBoundsNonGrid(idx,imgW,imgH);
@@ -1467,10 +1491,15 @@ function dlPiece(idx,total,fmt){
   const suffix = name.replace(/^fastframe-?/,'') || 'parte';
   if(fmt==='jpg'){
     askFileName(suffix, (finalName) => {
-      cv.toBlob(b=>{ _saveAs(b, finalName, 'image/jpeg'); toast('JPEG exportado!'); },'image/jpeg',0.92);
+      const finalNameWithSize=_splitEnsureSizeTagInFileName(finalName,pieceWcm,pieceHcm);
+      cv.toBlob(b=>{ _saveAs(b, finalNameWithSize, 'image/jpeg'); toast('JPEG exportado!'); },'image/jpeg',0.92);
     });
   } else {
-    askFileName(suffix, (finalName) => { exportPDFsave(cv, finalName); toast('PDF exportado!'); });
+    askFileName(suffix, (finalName) => {
+      const finalNameWithSize=_splitEnsureSizeTagInFileName(finalName,pieceWcm,pieceHcm);
+      exportPDFsave(cv, finalNameWithSize);
+      toast('PDF exportado!');
+    });
   }
 }
 
@@ -1773,12 +1802,21 @@ function _dlBleedPiece(idx,total,fmt){
   const piece=_buildBleedPieceCanvas(idx,total);
   if(!piece) return;
   const baseName=piece.name;
+  const baseWcm=splitOrient==='grid' ? (partWidths[0]||1) : (partWidths[idx]||partWidths[0]||1);
+  const baseHcm=splitOrient==='grid' ? (partHeights[0]||1) : (partHeights[idx]||partHeights[0]||1);
+  const outWcm=baseWcm+10;
+  const outHcm=baseHcm+10;
   if(fmt==='jpg'){
     askFileName(baseName, (finalName) => {
-      piece.canvas.toBlob(b=>{ _saveAs(b, finalName, 'image/jpeg').then(()=>toast('JPEG com sangria baixado!')); },'image/jpeg',0.92);
+      const finalNameWithSize=_splitEnsureSizeTagInFileName(finalName,outWcm,outHcm);
+      piece.canvas.toBlob(b=>{ _saveAs(b, finalNameWithSize, 'image/jpeg').then(()=>toast('JPEG com sangria baixado!')); },'image/jpeg',0.92);
     });
   } else {
-    askFileName(baseName, (finalName) => { exportPDFsave(piece.canvas, finalName); toast('PDF com sangria exportado!'); });
+    askFileName(baseName, (finalName) => {
+      const finalNameWithSize=_splitEnsureSizeTagInFileName(finalName,outWcm,outHcm);
+      exportPDFsave(piece.canvas, finalNameWithSize);
+      toast('PDF com sangria exportado!');
+    });
   }
 }
 
