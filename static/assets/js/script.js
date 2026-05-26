@@ -275,7 +275,12 @@ function loadC(e){ loadImgFile(e.target.files[0],'c'); }
 
 function _extractCmSizeFromFileName(name){
   if(!name) return null;
-  const match=String(name).match(/(\d+(?:[.,]\d+)?)\s*[xX]\s*(\d+(?:[.,]\d+)?)\s*cm\b/i);
+  const normalized=String(name)
+    .replace(/\.[^.]+$/,'')
+    .replace(/[_-]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+  const match=normalized.match(/(\d+(?:[.,]\d+)?)\s*(?:x|X|×)\s*(\d+(?:[.,]\d+)?)(?:\s*cm)?\b/i);
   if(!match) return null;
   const w=parseFloat(match[1].replace(',','.'));
   const h=parseFloat(match[2].replace(',','.'));
@@ -284,9 +289,21 @@ function _extractCmSizeFromFileName(name){
   return { w, h };
 }
 
+function _inferCmFromExportedPixels(fileName,wPx,hPx){
+  if(!fileName) return null;
+  const base=String(fileName).toLowerCase();
+  if(!base.includes('enquadrada')) return null;
+
+  const w=Math.round(((wPx/300)*2.54)*10)/10;
+  const h=Math.round(((hPx/300)*2.54)*10)/10;
+  if(!validatePositiveFrameValue(w)||!validatePositiveFrameValue(h)) return null;
+  if(w<1||w>500||h<1||h>500) return null;
+  return { w, h };
+}
+
 function loadImgFile(file,type){
   if(!file) return;
-  const inferredSize=(type==='q')?_extractCmSizeFromFileName(file.name):null;
+  const inferredSizeByName=(type==='q')?_extractCmSizeFromFileName(file.name):null;
   if(file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf')){
     loadPDF(file,type); return;
   }
@@ -295,6 +312,7 @@ function loadImgFile(file,type){
     imgEl.onload=()=>{
       const d2={img:imgEl,file,w:imgEl.naturalWidth,h:imgEl.naturalHeight};
       if(type==='q'){
+        const inferredSize=inferredSizeByName||_inferCmFromExportedPixels(file.name,imgEl.naturalWidth,imgEl.naturalHeight);
         customW=inferredSize?inferredSize.w:null;
         customH=inferredSize?inferredSize.h:null;
         qImg=d2;
@@ -568,6 +586,21 @@ function qiBuildExportCanvas(){
   return out;
 }
 
+function _qiEnsureSizeTagInFileName(baseName,w,h){
+  const safeBase=String(baseName||'fastframe')
+    .replace(/\.[^.]+$/,'')
+    .replace(/[^a-zA-Z0-9\u00C0-\u00FF\s\-_]/g,'')
+    .replace(/\s+/g,'-')
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'')
+    .toLowerCase() || 'fastframe';
+
+  const sizeTag=`${_qiRound(w,1)}x${_qiRound(h,1)}cm`;
+  if(/\d+(?:[.,]\d+)?\s*[xX]\s*\d+(?:[.,]\d+)?\s*cm\b/i.test(safeBase)) return safeBase;
+  if(/-enquadrada$/i.test(safeBase)) return `${safeBase.replace(/-enquadrada$/i,'')}-${sizeTag}-enquadrada`;
+  return `${safeBase}-${sizeTag}-enquadrada`;
+}
+
 function qiSaveImage(){
   if(!qImg) return toast('Carregue uma imagem primeiro.');
   const out=qiBuildExportCanvas();
@@ -585,9 +618,10 @@ function qiSaveImage(){
     .toLowerCase() || 'fastframe';
   const suggestedName=`${safeBase}-${_qiRound(w,1)}x${_qiRound(h,1)}cm-enquadrada`;
   askFileName('enquadrada', (finalName) => {
+    const finalNameWithSize=_qiEnsureSizeTagInFileName(finalName,w,h);
     out.toBlob((blob)=>{
       if(!blob){ toast('Falha ao gerar a imagem.'); return; }
-      _saveAs(blob, finalName, 'image/jpeg').then(()=>toast('Imagem salva!'));
+      _saveAs(blob, finalNameWithSize, 'image/jpeg').then(()=>toast('Imagem salva!'));
     }, 'image/jpeg', 0.95);
   }, suggestedName);
 }
