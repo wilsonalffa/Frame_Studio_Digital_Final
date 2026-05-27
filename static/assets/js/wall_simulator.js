@@ -42,6 +42,31 @@ let _wallRenderPending = false;
 let wallCompositionLocked = false;
 let wallGroupDragging = false;
 let wallGroupDragState = null;
+let wallVisibleWidthCm = 300; // largura real (cm) da parede visível na foto
+let wallVisibleHeightCm = 260; // altura real (cm) da parede entre teto e piso visíveis
+let wallLeftXPct = 2; // borda esquerda da parede visível (% horizontal)
+let wallRightXPct = 98; // borda direita da parede visível (% horizontal)
+let wallCeilingYPct = 8; // topo da parede na foto (% vertical)
+let wallFloorYPct = 82; // piso na foto (% vertical)
+let wallFurnitureHeightCm = 0; // 0 = sem referência de móvel
+let wallFurnitureTopYPct = 58;
+let wallFurnitureBottomYPct = 78;
+let wallFurnitureLeftXPct = 20;  // extremidade esquerda do móvel (%)
+let wallFurnitureRightXPct = 80; // extremidade direita do móvel (%)
+let wallCalibMarkMode = ''; // left|right|ceiling|floor|furnitureTop|furnitureBottom|furnitureLeft|furnitureRight
+let wallCalibrationMarksVisible = true; // exibe/oculta marcações de calibração
+let wallCalibMarks = {
+  left: null,
+  right: null,
+  ceiling: null,
+  floor: null,
+  furnitureTop: null,
+  furnitureBottom: null,
+  furnitureLeft: null,
+  furnitureRight: null,
+};
+const WALL_ESSENTIAL_MARKS = ['left', 'right', 'ceiling', 'floor'];
+const WALL_GUIDED_MARKS = ['left', 'right', 'ceiling', 'floor', 'furnitureTop', 'furnitureBottom', 'furnitureLeft', 'furnitureRight'];
 
 // Marca d'agua da simulacao de ambiente
 let wallWatermarkEnabled = false;
@@ -74,6 +99,791 @@ function _wallGetTargetSizeCm() {
     w: Math.max(20, Math.min(300, isFinite(w) ? w : 80)),
     h: Math.max(20, Math.min(300, isFinite(h) ? h : 60)),
   };
+}
+
+function _wallClamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function _wallParseInputNum(id, min, max) {
+  const el = document.getElementById(id);
+  const val = parseFloat(el?.value);
+  if (!isFinite(val)) return null;
+  return _wallClamp(val, min, max);
+}
+
+function _wallCurrentCalibState(useInputValues = false) {
+  const fromInput = (id, min, max, fallback) => {
+    if (!useInputValues) return fallback;
+    const parsed = _wallParseInputNum(id, min, max);
+    return parsed == null ? fallback : parsed;
+  };
+
+  return {
+    widthCm: fromInput('wallVisibleWidthCm', 80, 1200, wallVisibleWidthCm),
+    heightCm: fromInput('wallVisibleHeightCm', 80, 600, wallVisibleHeightCm),
+    leftX: fromInput('wallLeftXPct', 0, 95, wallLeftXPct),
+    rightX: fromInput('wallRightXPct', 5, 100, wallRightXPct),
+    ceilingY: fromInput('wallCeilingYPct', 0, 95, wallCeilingYPct),
+    floorY: fromInput('wallFloorYPct', 5, 100, wallFloorYPct),
+    furnitureCm: fromInput('wallFurnitureHeightCm', 0, 300, wallFurnitureHeightCm),
+    furnitureTopY: fromInput('wallFurnitureTopYPct', 0, 99, wallFurnitureTopYPct),
+    furnitureBottomY: fromInput('wallFurnitureBottomYPct', 1, 100, wallFurnitureBottomYPct),
+    furnitureLeftX: fromInput('wallFurnitureLeftXPct', 0, 95, wallFurnitureLeftXPct),
+    furnitureRightX: fromInput('wallFurnitureRightXPct', 5, 100, wallFurnitureRightXPct),
+  };
+}
+
+function _wallGetScaleCandidates(cW, cH, useInputValues = false) {
+  const cfg = _wallCurrentCalibState(useInputValues);
+  const candidates = [];
+
+  const wallWidthSpanPct = Math.max(0, cfg.rightX - cfg.leftX);
+  if (cfg.widthCm > 0 && wallWidthSpanPct >= 5 && cW > 0) {
+    const wallWidthSpanPx = (wallWidthSpanPct / 100) * cW;
+    candidates.push({ label: 'largura', ppc: wallWidthSpanPx / cfg.widthCm });
+  }
+
+  const wallSpanPct = Math.max(0, cfg.floorY - cfg.ceilingY);
+  if (cfg.heightCm > 0 && wallSpanPct >= 5 && cH > 0) {
+    const wallSpanPx = (wallSpanPct / 100) * cH;
+    candidates.push({ label: 'altura', ppc: wallSpanPx / cfg.heightCm });
+  }
+
+  const furnitureSpanPct = Math.max(0, cfg.furnitureBottomY - cfg.furnitureTopY);
+  if (cfg.furnitureCm > 0 && furnitureSpanPct >= 3 && cH > 0) {
+    const furnitureSpanPx = (furnitureSpanPct / 100) * cH;
+    candidates.push({ label: 'móvel', ppc: furnitureSpanPx / cfg.furnitureCm });
+  }
+
+  return candidates.filter((c) => isFinite(c.ppc) && c.ppc > 0);
+}
+
+function _wallComputePpc(cW, cH, useInputValues = false) {
+  const candidates = _wallGetScaleCandidates(cW, cH, useInputValues);
+  if (!candidates.length) return { ppc: cW / 300, candidates: [] };
+
+  const sorted = [...candidates].sort((a, b) => a.ppc - b.ppc);
+  const mid = Math.floor(sorted.length / 2);
+  const ppc = sorted.length % 2
+    ? sorted[mid].ppc
+    : (sorted[mid - 1].ppc + sorted[mid].ppc) / 2;
+
+  return { ppc, candidates };
+}
+
+function _wallUpdateScaleInfo(ppc, candidates = []) {
+  const info = document.getElementById('wallScaleInfo');
+  if (!info) return;
+  const pxCm = isFinite(ppc) && ppc > 0 ? ppc.toFixed(2) : '0.00';
+  if (!candidates.length) {
+    info.textContent = `Escala ativa: 1cm = ${pxCm}px (base padrão)`;
+    return;
+  }
+  const src = candidates.map((c) => `${c.label} ${c.ppc.toFixed(2)}px/cm`).join(' · ');
+  info.textContent = `Escala ativa: 1cm = ${pxCm}px | referências: ${src}`;
+}
+
+function _wallSyncCalibrationLabels() {
+  const setText = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = `${Math.round(val)}%`;
+  };
+  setText('wallLeftXL', wallLeftXPct);
+  setText('wallRightXL', wallRightXPct);
+  setText('wallCeilingYL', wallCeilingYPct);
+  setText('wallFloorYL', wallFloorYPct);
+  setText('wallFurnitureTopYL', wallFurnitureTopYPct);
+  setText('wallFurnitureBottomYL', wallFurnitureBottomYPct);
+}
+
+function _wallMarkModeLabel(mode) {
+  switch (mode) {
+    case 'left':          return 'borda esquerda da parede';
+    case 'right':         return 'borda direita da parede';
+    case 'ceiling':       return 'teto';
+    case 'floor':         return 'piso';
+    case 'furnitureTop':  return 'topo do móvel';
+    case 'furnitureBottom': return 'base do móvel';
+    case 'furnitureLeft': return 'extremidade esquerda do móvel';
+    case 'furnitureRight': return 'extremidade direita do móvel';
+    default: return '';
+  }
+}
+
+// ppc derivado apenas do eixo vertical (piso-teto ou móvel)
+function _wallGetVerticalPpc(cW, cH) {
+  const cfg = _wallCurrentCalibState(false);
+  const heightSpanPct = Math.max(0, cfg.floorY - cfg.ceilingY);
+  if (cfg.heightCm > 0 && heightSpanPct >= 5 && cH > 0)
+    return (heightSpanPct / 100) * cH / cfg.heightCm;
+  const furSpanPct = Math.max(0, cfg.furnitureBottomY - cfg.furnitureTopY);
+  if (cfg.furnitureCm > 0 && furSpanPct >= 3 && cH > 0)
+    return (furSpanPct / 100) * cH / cfg.furnitureCm;
+  return _wallComputePpc(cW, cH, false).ppc;
+}
+
+// ppc derivado apenas do eixo horizontal (largura da parede)
+function _wallGetHorizontalPpc(cW, cH) {
+  const cfg = _wallCurrentCalibState(false);
+  const widthSpanPct = Math.max(0, cfg.rightX - cfg.leftX);
+  if (cfg.widthCm > 0 && widthSpanPct >= 5 && cW > 0)
+    return (widthSpanPct / 100) * cW / cfg.widthCm;
+  return _wallComputePpc(cW, cH, false).ppc;
+}
+
+function _wallGetFurnitureSuggestion(cW, cH) {
+  const fL = wallCalibMarks.furnitureLeft;
+  const fR = wallCalibMarks.furnitureRight;
+  if (!fL || !fR) return null;
+
+  const hPpc = _wallGetHorizontalPpc(cW, cH);
+  if (!isFinite(hPpc) || hPpc <= 0) return null;
+
+  const xL = Math.round((fL.xPct / 100) * cW);
+  const xR = Math.round((fR.xPct / 100) * cW);
+  const yRef = Math.round(((fL.yPct + fR.yPct) / 2) / 100 * cH) + 14;
+  const furnitureWidthCm = Math.round(Math.abs(xR - xL) / hPpc);
+  if (!isFinite(furnitureWidthCm) || furnitureWidthCm <= 0) return null;
+
+  const suggestedWidthCm = Math.max(28, Math.round(furnitureWidthCm * 0.70));
+  const suggestedHeight3x2 = Math.max(20, Math.round(suggestedWidthCm * 2 / 3));
+  const suggestedHeight4x3 = Math.max(20, Math.round(suggestedWidthCm * 3 / 4));
+
+  return {
+    xL,
+    xR,
+    yRef,
+    furnitureWidthCm,
+    suggestedWidthCm,
+    suggestedHeight3x2,
+    suggestedHeight4x3,
+  };
+}
+
+function _wallGetVisibleBoundsPct() {
+  const left = _wallClamp(Math.min(wallLeftXPct, wallRightXPct - 1), 0, 99);
+  const right = _wallClamp(Math.max(wallRightXPct, left + 1), 1, 100);
+  const top = _wallClamp(Math.min(wallCeilingYPct, wallFloorYPct - 1), 0, 99);
+  const bottom = _wallClamp(Math.max(wallFloorYPct, top + 1), 1, 100);
+  return { left, right, top, bottom };
+}
+
+function _wallClampFrameIntoVisibleWall(frame, cW, cH, ppc) {
+  if (!frame || !isFinite(cW) || !isFinite(cH) || cW <= 0 || cH <= 0 || !isFinite(ppc) || ppc <= 0) return;
+
+  const b = _wallGetVisibleBoundsPct();
+  const leftPx = (b.left / 100) * cW;
+  const rightPx = (b.right / 100) * cW;
+  const topPx = (b.top / 100) * cH;
+  const bottomPx = (b.bottom / 100) * cH;
+
+  const fw = Math.max(1, Math.round(frame.wCm * ppc));
+  const fh = Math.max(1, Math.round(frame.hCm * ppc));
+  const ppPx = frame.ppOn ? Math.round((frame.ppSize || 3) * ppc) : 0;
+  const frameWpx = Math.round((frame.frameW || 0) * ppc);
+  const bw = fw + (ppPx + frameWpx) * 2;
+  const bh = fh + (ppPx + frameWpx) * 2;
+  const halfW = bw / 2;
+  const halfH = bh / 2;
+
+  const wallMidXPx = (leftPx + rightPx) / 2;
+  const wallMidYPx = (topPx + bottomPx) / 2;
+
+  let xPx = (frame.xP / 100) * cW;
+  let yPx = (frame.yP / 100) * cH;
+
+  const minX = leftPx + halfW;
+  const maxX = rightPx - halfW;
+  const minY = topPx + halfH;
+  const maxY = bottomPx - halfH;
+
+  xPx = minX <= maxX ? _wallClamp(xPx, minX, maxX) : wallMidXPx;
+  yPx = minY <= maxY ? _wallClamp(yPx, minY, maxY) : wallMidYPx;
+
+  frame.xP = _wallClamp((xPx / cW) * 100, 0, 100);
+  frame.yP = _wallClamp((yPx / cH) * 100, 0, 100);
+}
+
+function _wallCenterSelectedFrameInVisibleWall() {
+  if (!wallFrames.length) return false;
+  const idx = (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length)
+    ? wallSelectedIdx
+    : 0;
+  const f = wallFrames[idx];
+  if (!f) return false;
+
+  const b = _wallGetVisibleBoundsPct();
+  f.xP = (b.left + b.right) / 2;
+  f.yP = (b.top + b.bottom) / 2;
+
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs && cvs.width > 0 && cvs.height > 0) {
+    const ppc = _wallComputePpc(cvs.width, cvs.height, false).ppc;
+    _wallClampFrameIntoVisibleWall(f, cvs.width, cvs.height, ppc);
+  }
+
+  wallSelectedIdx = idx;
+  _wallUpdatePanelFromSelected();
+  return true;
+}
+
+function _wallCenterSelectedFrameOnFurnitureWidth() {
+  const fL = wallCalibMarks.furnitureLeft;
+  const fR = wallCalibMarks.furnitureRight;
+  if (!fL || !fR || !wallFrames.length) return false;
+
+  const idx = (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length)
+    ? wallSelectedIdx
+    : 0;
+  const f = wallFrames[idx];
+  if (!f) return false;
+
+  const centerXPct = _wallClamp((fL.xPct + fR.xPct) / 2, 0, 100);
+  f.xP = centerXPct;
+  wallSelectedIdx = idx;
+  _wallUpdatePanelFromSelected();
+  return true;
+}
+
+function _wallGetIdealCenterYPctFromFloor() {
+  const floor = wallCalibMarks.floor;
+  const cvs = document.getElementById('wallCanvas');
+  if (!floor || !cvs || cvs.width <= 0 || cvs.height <= 0) return null;
+
+  const vPpc = _wallGetVerticalPpc(cvs.width, cvs.height);
+  if (!isFinite(vPpc) || vPpc <= 0) return null;
+
+  const floorYPx = (floor.yPct / 100) * cvs.height;
+  const idealCenterYPx = floorYPx - (155 * vPpc);
+  return _wallClamp((idealCenterYPx / cvs.height) * 100, 0, 100);
+}
+
+function _wallCenterSelectedFrameOnIdealHeight() {
+  if (!wallFrames.length) return false;
+  const centerYPct = _wallGetIdealCenterYPctFromFloor();
+  if (!isFinite(centerYPct)) return false;
+
+  const idx = (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length)
+    ? wallSelectedIdx
+    : 0;
+  const f = wallFrames[idx];
+  if (!f) return false;
+
+  f.yP = centerYPct;
+
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs && cvs.width > 0 && cvs.height > 0) {
+    const ppc = _wallComputePpc(cvs.width, cvs.height, false).ppc;
+    _wallClampFrameIntoVisibleWall(f, cvs.width, cvs.height, ppc);
+  }
+
+  wallSelectedIdx = idx;
+  _wallUpdatePanelFromSelected();
+  return true;
+}
+
+function _wallEssentialProgressState() {
+  const done = WALL_GUIDED_MARKS.filter((mode) => !!wallCalibMarks[mode]);
+  const next = WALL_GUIDED_MARKS.find((mode) => !wallCalibMarks[mode]) || '';
+  return {
+    doneCount: done.length,
+    total: WALL_GUIDED_MARKS.length,
+    next,
+  };
+}
+
+function _wallIsAutoAdvanceEnabled() {
+  const cb = document.getElementById('wallCalibAutoAdvance');
+  return !cb || !!cb.checked;
+}
+
+function _wallNextMarkModeFrom(currentMode) {
+  const idx = WALL_GUIDED_MARKS.indexOf(currentMode);
+  if (idx < 0) return '';
+  for (let i = idx + 1; i < WALL_GUIDED_MARKS.length; i++) {
+    const mode = WALL_GUIDED_MARKS[i];
+    if (!wallCalibMarks[mode]) return mode;
+  }
+  return '';
+}
+
+function _wallUpdateCalibProgressUi() {
+  const progressEl = document.getElementById('wallCalibProgress');
+  const nextEl = document.getElementById('wallCalibNext');
+  const state = _wallEssentialProgressState();
+
+  if (progressEl) {
+    progressEl.textContent = `Progresso: ${state.doneCount}/${state.total} pontos da marcação guiada`;
+  }
+  if (nextEl) {
+    if (state.next) {
+      nextEl.textContent = `Próximo sugerido: ${_wallMarkModeLabel(state.next)}`;
+    } else {
+      nextEl.textContent = 'Marcação guiada completa. Você pode ajustar livremente se quiser refinar o resultado.';
+    }
+  }
+}
+
+function wallStartGuidedCalibration() {
+  const state = _wallEssentialProgressState();
+  const mode = state.next || WALL_GUIDED_MARKS[0];
+  _wallCenterSelectedFrameInVisibleWall();
+  renderWall();
+  wallStartMarkCalibration(mode);
+}
+
+function wallRefreshCalibrationGuideUi() {
+  _wallUpdateCalibMarkUi();
+}
+
+function _wallEnsureMarkButtonLabels() {
+  document.querySelectorAll('[data-wall-mark-mode]').forEach((btn) => {
+    if (!btn.dataset.wallBaseLabel) {
+      btn.dataset.wallBaseLabel = (btn.textContent || '').trim();
+    }
+  });
+}
+
+function _wallUpdateCalibMarkUi() {
+  const hint = document.getElementById('wallCalibMarkHint');
+  const state = _wallEssentialProgressState();
+  _wallEnsureMarkButtonLabels();
+  if (hint) {
+    hint.textContent = wallCalibMarkMode
+      ? `Marcação ativa: clique no ${_wallMarkModeLabel(wallCalibMarkMode)} no canvas.`
+      : state.next
+        ? `Modo guiado: clique no ${_wallMarkModeLabel(state.next)} no canvas.`
+        : 'Marcação guiada concluída. Faça ajustes finos se necessário.';
+  }
+
+  document.querySelectorAll('[data-wall-mark-mode]').forEach((btn) => {
+    const mode = btn.getAttribute('data-wall-mark-mode') || '';
+    const active = mode === wallCalibMarkMode;
+    const done = !!wallCalibMarks[mode];
+    const baseLabel = btn.dataset.wallBaseLabel || (btn.textContent || '').trim();
+
+    btn.textContent = done
+      ? `✅ ${baseLabel.replace(/^📌\s*/, '').replace(/^✅\s*/, '')}`
+      : baseLabel;
+
+    if (active) {
+      btn.style.background = 'var(--gold)';
+      btn.style.color = '#fff';
+      btn.style.borderColor = 'var(--gold)';
+      return;
+    }
+
+    if (done) {
+      btn.style.background = 'rgba(46,125,82,0.10)';
+      btn.style.color = '#2E7D52';
+      btn.style.borderColor = 'rgba(46,125,82,0.45)';
+      return;
+    }
+
+    btn.style.background = '#fff';
+    btn.style.color = 'var(--brown)';
+    btn.style.borderColor = 'var(--border2)';
+  });
+
+  _wallUpdateCalibProgressUi();
+}
+
+function wallStartMarkCalibration(mode) {
+  wallCalibMarkMode = mode || '';
+  _wallUpdateCalibMarkUi();
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs) cvs.style.cursor = wallCalibMarkMode ? 'crosshair' : 'default';
+}
+
+function wallStopMarkCalibration() {
+  wallCalibMarkMode = '';
+  _wallUpdateCalibMarkUi();
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs) cvs.style.cursor = 'default';
+}
+
+function toggleWallCalibrationMarks() {
+  const cb = document.getElementById('wallCalibMarksVisible');
+  wallCalibrationMarksVisible = !!(cb && cb.checked);
+  renderWall();
+}
+
+function wallClearCalibrationMarks() {
+  wallCalibMarks = {
+    left: null,
+    right: null,
+    ceiling: null,
+    floor: null,
+    furnitureTop: null,
+    furnitureBottom: null,
+    furnitureLeft: null,
+    furnitureRight: null,
+  };
+
+  // Voltar para posições padrão para recalibração do zero.
+  wallLeftXPct = 2;
+  wallRightXPct = 98;
+  wallCeilingYPct = 8;
+  wallFloorYPct = 82;
+  wallFurnitureTopYPct = 58;
+  wallFurnitureBottomYPct = 78;
+  wallFurnitureLeftXPct = 20;
+  wallFurnitureRightXPct = 80;
+
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = String(Math.round(v));
+  };
+  setVal('wallLeftXPct', wallLeftXPct);
+  setVal('wallRightXPct', wallRightXPct);
+  setVal('wallCeilingYPct', wallCeilingYPct);
+  setVal('wallFloorYPct', wallFloorYPct);
+  setVal('wallFurnitureTopYPct', wallFurnitureTopYPct);
+  setVal('wallFurnitureBottomYPct', wallFurnitureBottomYPct);
+  setVal('wallFurnitureLeftXPct', wallFurnitureLeftXPct);
+  setVal('wallFurnitureRightXPct', wallFurnitureRightXPct);
+
+  const info = document.getElementById('wallSuggestInfo');
+  if (info) info.style.display = 'none';
+
+  wallStopMarkCalibration();
+  wallApplyScaleCalibration(false);
+  _wallUpdateCalibProgressUi();
+  toast('Marcacoes de calibracao limpas.');
+}
+
+function _wallApplyMarkPoint(xPct, yPct) {
+  if (!wallCalibMarkMode) return;
+  const currentMode = wallCalibMarkMode;
+
+  wallCalibMarks[wallCalibMarkMode] = {
+    xPct: _wallClamp(xPct, 0, 100),
+    yPct: _wallClamp(yPct, 0, 100),
+  };
+
+  switch (wallCalibMarkMode) {
+    case 'left':
+      wallLeftXPct = _wallClamp(xPct, 0, 95);
+      break;
+    case 'right':
+      wallRightXPct = _wallClamp(xPct, 5, 100);
+      break;
+    case 'ceiling':
+      wallCeilingYPct = _wallClamp(yPct, 0, 95);
+      break;
+    case 'floor':
+      wallFloorYPct = _wallClamp(yPct, 5, 100);
+      break;
+    case 'furnitureTop':
+      wallFurnitureTopYPct = _wallClamp(yPct, 0, 99);
+      break;
+    case 'furnitureBottom':
+      wallFurnitureBottomYPct = _wallClamp(yPct, 1, 100);
+      break;
+    case 'furnitureLeft':
+      wallFurnitureLeftXPct = _wallClamp(xPct, 0, 95);
+      break;
+    case 'furnitureRight':
+      wallFurnitureRightXPct = _wallClamp(xPct, 5, 100);
+      break;
+    default:
+      return;
+  }
+
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = String(Math.round(v));
+  };
+  setVal('wallLeftXPct', wallLeftXPct);
+  setVal('wallRightXPct', wallRightXPct);
+  setVal('wallCeilingYPct', wallCeilingYPct);
+  setVal('wallFloorYPct', wallFloorYPct);
+  setVal('wallFurnitureTopYPct', wallFurnitureTopYPct);
+  setVal('wallFurnitureBottomYPct', wallFurnitureBottomYPct);
+  setVal('wallFurnitureLeftXPct', wallFurnitureLeftXPct);
+  setVal('wallFurnitureRightXPct', wallFurnitureRightXPct);
+
+  const shouldCenterOnFurniture = currentMode === 'furnitureLeft' || currentMode === 'furnitureRight';
+  if (shouldCenterOnFurniture) {
+    const centered = _wallCenterSelectedFrameOnFurnitureWidth();
+    if (centered) {
+      toast('Quadro centralizado no comprimento do movel.');
+    }
+  }
+
+  if (currentMode === 'floor') {
+    const centeredY = _wallCenterSelectedFrameOnIdealHeight();
+    if (centeredY) {
+      toast('Centro do quadro alinhado na faixa ideal de 1,50-1,60 m.');
+    }
+  }
+
+  wallApplyScaleCalibration();
+
+  const nextMode = _wallIsAutoAdvanceEnabled() ? _wallNextMarkModeFrom(currentMode) : '';
+  if (nextMode) {
+    wallStartMarkCalibration(nextMode);
+  } else {
+    const guidedState = _wallEssentialProgressState();
+    if (guidedState.doneCount >= guidedState.total) {
+      toast('Marcacao guiada concluida.');
+    }
+    wallStopMarkCalibration();
+  }
+}
+
+function wallApplyScaleCalibration(shouldAutoResize = false) {
+  const widthCm = _wallParseInputNum('wallVisibleWidthCm', 80, 1200);
+  const heightCm = _wallParseInputNum('wallVisibleHeightCm', 80, 600);
+  const leftX = _wallParseInputNum('wallLeftXPct', 0, 95);
+  const rightX = _wallParseInputNum('wallRightXPct', 5, 100);
+  const ceilingY = _wallParseInputNum('wallCeilingYPct', 0, 95);
+  const floorY = _wallParseInputNum('wallFloorYPct', 5, 100);
+  const furnitureCm = _wallParseInputNum('wallFurnitureHeightCm', 0, 300);
+  const furnitureTopY = _wallParseInputNum('wallFurnitureTopYPct', 0, 99);
+  const furnitureBottomY = _wallParseInputNum('wallFurnitureBottomYPct', 1, 100);
+  const furnitureLeftX = _wallParseInputNum('wallFurnitureLeftXPct', 0, 95);
+  const furnitureRightX = _wallParseInputNum('wallFurnitureRightXPct', 5, 100);
+
+  if (widthCm != null) wallVisibleWidthCm = widthCm;
+  if (heightCm != null) wallVisibleHeightCm = heightCm;
+  if (leftX != null) wallLeftXPct = leftX;
+  if (rightX != null) wallRightXPct = rightX;
+  if (ceilingY != null) wallCeilingYPct = ceilingY;
+  if (floorY != null) wallFloorYPct = floorY;
+  if (furnitureCm != null) wallFurnitureHeightCm = furnitureCm;
+  if (furnitureTopY != null) wallFurnitureTopYPct = furnitureTopY;
+  if (furnitureBottomY != null) wallFurnitureBottomYPct = furnitureBottomY;
+  if (furnitureLeftX != null) wallFurnitureLeftXPct = furnitureLeftX;
+  if (furnitureRightX != null) wallFurnitureRightXPct = furnitureRightX;
+
+  // Garantir ordem dos intervalos horizontais
+  if (wallRightXPct <= wallLeftXPct + 3) {
+    wallRightXPct = _wallClamp(wallLeftXPct + 3, 5, 100);
+  }
+
+  // Garantir ordem dos intervalos verticais
+  if (wallFloorYPct <= wallCeilingYPct + 3) {
+    wallFloorYPct = _wallClamp(wallCeilingYPct + 3, 5, 100);
+  }
+  if (wallFurnitureBottomYPct <= wallFurnitureTopYPct + 2) {
+    wallFurnitureBottomYPct = _wallClamp(wallFurnitureTopYPct + 2, 1, 100);
+  }
+  if (wallFurnitureRightXPct <= wallFurnitureLeftXPct + 2) {
+    wallFurnitureRightXPct = _wallClamp(wallFurnitureLeftXPct + 2, 5, 100);
+  }
+
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = String(Math.round(v));
+  };
+  setVal('wallVisibleWidthCm', wallVisibleWidthCm);
+  setVal('wallVisibleHeightCm', wallVisibleHeightCm);
+  setVal('wallLeftXPct', wallLeftXPct);
+  setVal('wallRightXPct', wallRightXPct);
+  setVal('wallCeilingYPct', wallCeilingYPct);
+  setVal('wallFloorYPct', wallFloorYPct);
+  setVal('wallFurnitureHeightCm', wallFurnitureHeightCm);
+  setVal('wallFurnitureTopYPct', wallFurnitureTopYPct);
+  setVal('wallFurnitureBottomYPct', wallFurnitureBottomYPct);
+  setVal('wallFurnitureLeftXPct', wallFurnitureLeftXPct);
+  setVal('wallFurnitureRightXPct', wallFurnitureRightXPct);
+  _wallSyncCalibrationLabels();
+
+  _wallCenterSelectedFrameOnIdealHeight();
+  if (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length) {
+    const cvs = document.getElementById('wallCanvas');
+    if (cvs && cvs.width > 0 && cvs.height > 0) {
+      const ppc = _wallComputePpc(cvs.width, cvs.height, false).ppc;
+      _wallClampFrameIntoVisibleWall(wallFrames[wallSelectedIdx], cvs.width, cvs.height, ppc);
+    }
+  }
+  _wallUpdateCalibProgressUi();
+
+  if (shouldAutoResize) {
+    const cvs = document.getElementById('wallCanvas');
+    if (cvs && cvs.width > 0 && wallFrames.length > 0) {
+      const suggestion = _wallGetFurnitureSuggestion(cvs.width, cvs.height);
+      if (suggestion) {
+        const idx = (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length)
+          ? wallSelectedIdx
+          : 0;
+        const f = wallFrames[idx];
+        const ratio = (f && f.hCm > 0) ? (f.wCm / f.hCm) : (3 / 2);
+        const h3x2Ratio = 3 / 2;
+        const h4x3Ratio = 4 / 3;
+        const choose3x2 = Math.abs(ratio - h3x2Ratio) <= Math.abs(ratio - h4x3Ratio);
+
+        f.wCm = suggestion.suggestedWidthCm;
+        f.hCm = choose3x2 ? suggestion.suggestedHeight3x2 : suggestion.suggestedHeight4x3;
+
+        wallSelectedIdx = idx;
+        _wallUpdatePanelFromSelected();
+        toast(`Quadro ajustado para ${f.wCm}x${f.hCm}cm (sugestao automatica).`);
+      }
+    }
+  }
+
+  renderWall();
+}
+
+function wallPreviewScaleCalibration() {
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs && cvs.width > 0) {
+    const { ppc, candidates } = _wallComputePpc(cvs.width, cvs.height, true);
+    _wallUpdateScaleInfo(ppc, candidates);
+  } else {
+    const fallback = _wallCurrentCalibState(true);
+    _wallUpdateScaleInfo(0, [
+      { label: 'largura', ppc: 0 / Math.max(1, fallback.widthCm) }
+    ].filter((c) => isFinite(c.ppc) && c.ppc > 0));
+  }
+}
+
+function _wallDrawCalibrationOverlay(ctx, cW, cH) {
+  const colorByMode = {
+    left:            'rgba(32, 82, 149, 0.95)',
+    right:           'rgba(32, 82, 149, 0.95)',
+    ceiling:         'rgba(178, 34, 34, 0.95)',
+    floor:           'rgba(178, 34, 34, 0.95)',
+    furnitureTop:    'rgba(46, 125, 82, 0.98)',
+    furnitureBottom: 'rgba(46, 125, 82, 0.98)',
+    furnitureLeft:   'rgba(130, 60, 180, 0.95)',
+    furnitureRight:  'rgba(130, 60, 180, 0.95)',
+  };
+
+  const labelByMode = {
+    left:            'E',
+    right:           'D',
+    ceiling:         'T',
+    floor:           'P',
+    furnitureTop:    'M+',
+    furnitureBottom: 'M-',
+    furnitureLeft:   'ML',
+    furnitureRight:  'MR',
+  };
+
+  ctx.save();
+  Object.entries(wallCalibMarks).forEach(([mode, mark]) => {
+    if (!mark) return;
+    const x = Math.round((mark.xPct / 100) * cW);
+    const y = Math.round((mark.yPct / 100) * cH);
+    const color = colorByMode[mode] || 'rgba(26,48,81,0.9)';
+    const label = labelByMode[mode] || '';
+
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.stroke();
+
+    if (label) {
+      ctx.font = "700 10px 'Avenir','Nunito',sans-serif";
+      ctx.fillStyle = 'rgba(255,255,255,0.98)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x, y + 0.5);
+    }
+  });
+
+  // Indicador discreto da marcação ativa
+  if (wallCalibMarkMode) {
+    ctx.font = "700 11px 'Avenir','Nunito',sans-serif";
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(255, 193, 7, 0.98)';
+    ctx.fillText('📌 Marcando: ' + _wallMarkModeLabel(wallCalibMarkMode), 10, 10);
+  }
+
+  // ── Faixa de altura ideal (1,50–1,60 m do piso) ──
+  // Usa ppc VERTICAL puro (piso-teto), evitando distorção do ppc de largura.
+  const floorMark = wallCalibMarks.floor;
+  if (floorMark) {
+    const vPpc = _wallGetVerticalPpc(cW, cH);
+    if (vPpc > 0) {
+      const yFloorPx  = Math.round((floorMark.yPct / 100) * cH);
+      const y160 = yFloorPx - Math.round(160 * vPpc);
+      const y150 = yFloorPx - Math.round(150 * vPpc);
+
+      if (y160 >= 0 && y150 <= cH && y150 > y160) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(184, 144, 60, 0.18)';
+        ctx.fillRect(0, y160, cW, y150 - y160);
+
+        const yMid = Math.round((y160 + y150) / 2);
+        ctx.setLineDash([10, 5]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(184, 144, 60, 0.85)';
+        ctx.beginPath();
+        ctx.moveTo(0, yMid);
+        ctx.lineTo(cW, yMid);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const labelText = '👁 Altura ideal (1,50–1,60 m)';
+        ctx.font = "700 11px 'Avenir','Nunito',sans-serif";
+        const tw = ctx.measureText(labelText).width;
+        const lx = cW - tw - 14;
+        const ly = y160 - 16 < 4 ? y150 + 4 : y160 - 16;
+        ctx.fillStyle = 'rgba(255,255,255,0.90)';
+        ctx.fillRect(lx - 4, ly - 1, tw + 8, 15);
+        ctx.fillStyle = 'rgba(140, 100, 20, 1)';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(labelText, lx, ly);
+        ctx.restore();
+      }
+    }
+  }
+
+  // ── Indicador de largura do móvel e sugestão de tamanho ──
+  const suggestion = _wallGetFurnitureSuggestion(cW, cH);
+  if (suggestion) {
+    const xL = suggestion.xL;
+    const xR = suggestion.xR;
+    const yRef = suggestion.yRef;
+
+      // Linha de cota
+      ctx.save();
+      ctx.strokeStyle = 'rgba(130, 60, 180, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(xL, yRef - 5); ctx.lineTo(xL, yRef + 5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xR, yRef - 5); ctx.lineTo(xR, yRef + 5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xL, yRef); ctx.lineTo(xR, yRef); ctx.stroke();
+
+      // Cálculo e sugestão
+      const furWidthCm = suggestion.furnitureWidthCm;
+      const sugW = suggestion.suggestedWidthCm;
+      const sugH3x2 = suggestion.suggestedHeight3x2;
+      const sugH4x3 = suggestion.suggestedHeight4x3;
+      const sugText = `📐 Móvel ≈ ${furWidthCm}cm  →  Arte sugerida: ${sugW}×${sugH3x2}cm (3:2)  ou  ${sugW}×${sugH4x3}cm (4:3)`;
+      ctx.font = "600 11px 'Avenir','Nunito',sans-serif";
+      const stw = ctx.measureText(sugText).width;
+      const sx = Math.max(4, Math.min(xL, cW - stw - 12));
+      const sy = yRef + 6;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillRect(sx - 4, sy - 1, stw + 8, 15);
+      ctx.fillStyle = 'rgba(90, 20, 140, 1)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(sugText, sx, sy);
+
+      // Atualizar painel
+      const info = document.getElementById('wallSuggestInfo');
+      if (info) {
+        info.textContent = `Móvel ≈ ${furWidthCm} cm → Arte: ${sugW}×${sugH3x2}cm (3:2) ou ${sugW}×${sugH4x3}cm (4:3)`;
+        info.style.display = 'block';
+      }
+      ctx.restore();
+  } else {
+    const info = document.getElementById('wallSuggestInfo');
+    if (info) info.style.display = 'none';
+  }
+
+  ctx.restore();
 }
 
 function _wallUpdateCompositionLockBtn() {
@@ -136,7 +946,7 @@ function _wallDefaultFrame(img) {
   return {
     img,
     xP: isFinite(xP) ? xP : 50,
-    yP: isFinite(yP) ? yP : 38,
+    yP: isFinite(yP) ? yP : 46,
     wCm,
     hCm,
     frameColor: wallFrameColor || '#3C2F1E',
@@ -155,9 +965,16 @@ function wallAddFrame(img) {
   const frame = _wallDefaultFrame(img);
   // Deslocar levemente para não sobrepor quadros existentes
   if (wallFrames.length > 0) {
-    frame.xP = Math.min(85, 50 + wallFrames.length * 8);
-    frame.yP = Math.min(75, 38 + wallFrames.length * 4);
+    frame.xP = Math.min(78, 50 + wallFrames.length * 5);
+    frame.yP = Math.min(66, 46 + wallFrames.length * 3);
   }
+
+  const cvs = document.getElementById('wallCanvas');
+  if (cvs && cvs.width > 0 && cvs.height > 0) {
+    const ppc = _wallComputePpc(cvs.width, cvs.height, false).ppc;
+    _wallClampFrameIntoVisibleWall(frame, cvs.width, cvs.height, ppc);
+  }
+
   wallFrames.push(frame);
   wallSelectedIdx = wallFrames.length - 1;
   wArtImg = img; // compatibilidade com código legado
@@ -333,6 +1150,23 @@ function _wallApplyPanelToSelected() {
   if (wHInput && wHInput.value) f.hCm = parseFloat(wHInput.value) || f.hCm;
 }
 
+function wallSyncControlsPaneHeight() {
+  const leftCol = document.getElementById('wallSimCanvasCol');
+  const rightCol = document.getElementById('wallSimControlsCol');
+  if (!leftCol || !rightCol) return;
+
+  if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
+    rightCol.style.maxHeight = 'none';
+    rightCol.style.overflowY = 'visible';
+    return;
+  }
+
+  const leftH = Math.round(leftCol.getBoundingClientRect().height || 0);
+  if (leftH <= 0) return;
+  rightCol.style.maxHeight = leftH + 'px';
+  rightCol.style.overflowY = 'auto';
+}
+
 // ── Render principal ──────────────────────────────────────
 
 function renderWall() {
@@ -351,7 +1185,8 @@ function _wallDoRender() {
   cvs.width = mw;
   cvs.height = Math.round(wEnvImg.naturalHeight * mw / wEnvImg.naturalWidth);
   const ctx = cvs.getContext('2d');
-  const ppc = mw / 300; // pixels por cm (escala de display)
+  const { ppc, candidates } = _wallComputePpc(cvs.width, cvs.height, false);
+  _wallUpdateScaleInfo(ppc, candidates);
 
   // Fundo — ambiente
   ctx.drawImage(wEnvImg, 0, 0, cvs.width, cvs.height);
@@ -366,8 +1201,17 @@ function _wallDoRender() {
     _wallDrawGuides(ctx, cvs.width, cvs.height);
   }
 
+  if (wallCalibrationMarksVisible || wallCalibMarkMode) {
+    _wallDrawCalibrationOverlay(ctx, cvs.width, cvs.height);
+  } else {
+    const info = document.getElementById('wallSuggestInfo');
+    if (info) info.style.display = 'none';
+  }
+
   // Marca d'agua acima da simulacao exportada
   _wallDrawWatermark(ctx, cvs.width, cvs.height);
+
+  wallSyncControlsPaneHeight();
 
 }
 
@@ -818,7 +1662,7 @@ function _wallDrawHandles(ctx, f, cW, cH, ppc) {
 function _wallDrawGuides(ctx, cW, cH) {
   const f = wallFrames[wallSelectedIdx];
   if (!f) return;
-  const ppc = cW / 300;
+  const { ppc } = _wallComputePpc(cW, cH, false);
   const xPx = Math.round(f.xP / 100 * cW);
   const fw = Math.round(f.wCm * ppc), fh = Math.round(f.hCm * ppc);
   const ppPx = f.ppOn ? Math.round((f.ppSize || 3) * ppc) : 0;
@@ -911,7 +1755,9 @@ function wallInitDrag() {
   if (cvs._wallDragInited) return;
   cvs._wallDragInited = true;
 
-  function getPPC() { return cvs.width / 300; }
+  function getPPC() {
+    return _wallComputePpc(cvs.width, cvs.height, false).ppc;
+  }
 
   function onDown(e) {
     if (!wEnvImg) return;
@@ -919,6 +1765,13 @@ function wallInitDrag() {
     const { x, y } = _wallCanvasPos(e, cvs);
     const ppc = getPPC();
     const cW = cvs.width, cH = cvs.height;
+
+    if (wallCalibMarkMode) {
+      const xPct = _wallClamp((x / cW) * 100, 0, 100);
+      const yPct = _wallClamp((y / cH) * 100, 0, 100);
+      _wallApplyMarkPoint(xPct, yPct);
+      return;
+    }
 
     // Prioridade: se clicou na marca d'agua, arrastar marca
     if (_wallWatermarkHitTest(x, y, cvs) && !wallWatermarkLocked) {
@@ -969,6 +1822,11 @@ function wallInitDrag() {
     const { x, y } = _wallCanvasPos(e, cvs);
     const ppc = getPPC();
     const cW = cvs.width, cH = cvs.height;
+
+    if (wallCalibMarkMode) {
+      cvs.style.cursor = 'crosshair';
+      return;
+    }
 
     if (wallWatermarkDragging) {
       e.preventDefault();
@@ -1074,6 +1932,8 @@ function checkWall() {
     c.width = mw;
     c.height = Math.round(wEnvImg.naturalHeight * mw / wEnvImg.naturalWidth);
     c.getContext('2d').drawImage(wEnvImg, 0, 0, c.width, c.height);
+    const { ppc, candidates } = _wallComputePpc(c.width, c.height, false);
+    _wallUpdateScaleInfo(ppc, candidates);
   }
 }
 
@@ -1283,8 +2143,12 @@ function wallCopyStyleToAll() {
 // ── Inicialização ─────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  wallApplyScaleCalibration();
+  wallRefreshCalibrationGuideUi();
   _wallUpdateCompositionLockBtn();
   _wallUpdateWatermarkUI();
+  wallSyncControlsPaneHeight();
+  window.addEventListener('resize', wallSyncControlsPaneHeight);
   // Inicializar drag após canvas estar visível
   const obs = new MutationObserver(() => {
     const cvs = document.getElementById('wallCanvas');
@@ -1305,6 +2169,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const cvs = document.getElementById('wallCanvas');
           if (cvs) wallInitDrag();
           renderWall();
+          wallSyncControlsPaneHeight();
         }, 50);
       }
     };

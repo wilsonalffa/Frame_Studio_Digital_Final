@@ -935,6 +935,7 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                     <div class="qi-stage" id="qiStage">
                       <canvas id="qiCanvas"></canvas>
                     </div>
+                    <div id="qiLiveStatus" class="qi-live-status" aria-live="polite">Encaixe: Preencher · Zoom: 100% · Offset: 0 cm / 0 cm</div>
                   </div>
                   <div class="qi-controls">
                     <div class="qi-size-studio">
@@ -969,16 +970,12 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                         onclick="qiSetFitMode('contain',this)">Encaixar</button>
                     </div>
                     <div>
-                      <div class="sq-block-label">Escala da imagem</div>
+                      <div class="sq-block-label">Zoom da imagem</div>
                       <div style="display:flex;flex-direction:column;gap:8px">
-                        <label style="font-size:11px;color:var(--gray)">Horizontal: <span
-                            id="qiScaleXVal">100%</span></label>
-                        <input type="range" id="qiScaleX" min="35" max="400" step="1" value="100"
-                          oninput="qiAdjustScaleAxis('x',this.value)">
-                        <label style="font-size:11px;color:var(--gray)">Vertical: <span
-                            id="qiScaleYVal">100%</span></label>
-                        <input type="range" id="qiScaleY" min="35" max="400" step="1" value="100"
-                          oninput="qiAdjustScaleAxis('y',this.value)">
+                        <label style="font-size:11px;color:var(--gray)">Zoom geral: <span
+                            id="qiZoomVal">100%</span></label>
+                        <input type="range" id="qiZoomSlider" min="35" max="400" step="1" value="100"
+                          oninput="qiAdjustZoom(this.value)">
                       </div>
                     </div>
                     <div>
@@ -1007,13 +1004,15 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                         Defina largura e altura para ver a saída exata da exportação.
                       </div>
                     </div>
+                    <div id="qiSmartAlert" class="qi-smart-alert hidden" aria-live="polite"></div>
                     <div class="qi-actions">
-                      <button class="dl-btn" type="button" onclick="qiResetTransform()">Centralizar imagem</button>
+                      <button class="dl-btn" type="button" onclick="qiCenterImage()">Centralizar imagem</button>
+                      <button class="dl-btn" type="button" onclick="qiResetTransform()">Reset completo</button>
                       <button class="dl-btn" type="button" onclick="qiSaveImage()">Salvar imagem</button>
                       <button class="dl-btn pri" type="button" onclick="qiApplyToCustomCheck()">Aplicar no
                         Verificador</button>
                     </div>
-                    <div style="font-size:11px;color:var(--gray);margin-top:6px">
+                    <div class="qi-helper-copy">
                       Copia as medidas deste enquadramento para o Verificador e recalcula a qualidade automaticamente.
                     </div>
                     <div id="qiInfo" style="font-size:11px;color:var(--gray);line-height:1.8"></div>
@@ -1466,7 +1465,7 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
           </div>
           <div class="two-col">
             <!-- CANVAS DA PAREDE -->
-            <div class="canvas-card" style="padding:14px">
+            <div class="canvas-card" id="wallSimCanvasCol" style="padding:14px">
               <div
                 style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
                 <div
@@ -1510,7 +1509,7 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
             </div>
 
             <!-- PAINEL DE CONTROLES -->
-            <div style="display:flex;flex-direction:column;gap:14px">
+            <div id="wallSimControlsCol" style="display:flex;flex-direction:column;gap:14px;max-height:min(92vh,1200px);overflow-y:auto;overscroll-behavior:contain;padding-right:4px;scrollbar-gutter:stable">
 
               <!-- Carregar imagens -->
               <div class="canvas-card">
@@ -1524,6 +1523,134 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                 <input type="file" id="wArt" accept="image/*" multiple style="display:none" onchange="loadArt(event)">
                 <div style="font-size:11px;color:var(--gray);text-align:center;margin-top:4px">Clique em "+ Adicionar
                   Quadro" para cada nova imagem</div>
+              </div>
+
+              <div class="canvas-card">
+                <div class="card-h" style="margin-bottom:10px">Calibrar Proporção Real</div>
+
+                <!-- Inputs de medidas reais -->
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px">
+                  <div class="field">
+                    <label style="display:block;min-height:30px;line-height:1.2">Largura parede (cm)</label>
+                    <input type="number" id="wallVisibleWidthCm" min="80" max="1200" step="1" value="300"
+                      onchange="wallApplyScaleCalibration()" onblur="wallApplyScaleCalibration()"
+                      style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:7px 9px;border-radius:4px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  </div>
+                  <div class="field">
+                    <label style="display:block;min-height:30px;line-height:1.2">Pé-direito (cm)</label>
+                    <input type="number" id="wallVisibleHeightCm" min="80" max="600" step="1" value="280"
+                      onchange="wallApplyScaleCalibration()" onblur="wallApplyScaleCalibration()"
+                      style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:7px 9px;border-radius:4px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  </div>
+                  <div class="field">
+                    <label>Altura do móvel (cm)</label>
+                    <input type="number" id="wallFurnitureHeightCm" min="0" max="300" step="1" value="0"
+                      placeholder="0 = sem móvel"
+                      onchange="wallApplyScaleCalibration()" onblur="wallApplyScaleCalibration()"
+                      style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:7px 9px;border-radius:4px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  </div>
+                </div>
+
+                <!-- Fluxo guiado -->
+                <div style="font-size:11px;color:var(--gray);line-height:1.45;background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:8px 10px;margin-bottom:10px">
+                  <div id="wallCalibProgress" style="font-size:12px;font-weight:700;color:var(--brown)">Progresso: 0/8 pontos da marcação guiada</div>
+                  <div id="wallCalibNext" style="margin-top:3px">Próximo sugerido: borda esquerda da parede</div>
+                  <button type="button" onclick="wallStartGuidedCalibration()"
+                    style="margin-top:8px;padding:8px 10px;border-radius:6px;border:1px solid var(--gold);background:#fff;color:var(--gold);font-size:11px;font-weight:700;cursor:pointer">Iniciar marcação guiada completa (8 pontos)</button>
+                  <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--brown);font-weight:700;cursor:pointer">
+                    <input type="checkbox" id="wallCalibAutoAdvance" checked onchange="wallRefreshCalibrationGuideUi()" style="accent-color:var(--gold)">
+                    Avançar automaticamente para o próximo ponto
+                  </label>
+                </div>
+
+                <!-- Grupo: Largura -->
+                <div style="margin-bottom:8px">
+                  <div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gray);font-weight:700;margin-bottom:6px">Largura</div>
+                  <!-- inputs ocultos mantidos para compatibilidade com JS -->
+                  <input type="range" id="wallLeftXPct"  min="0"  max="95"  step="1" value="2"  style="display:none">
+                  <input type="range" id="wallRightXPct" min="5"  max="100" step="1" value="98" style="display:none">
+                  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">
+                    <button type="button" data-wall-mark-mode="left"
+                      onclick="wallStartMarkCalibration('left')"
+                      style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Marcar borda esq.</button>
+                    <button type="button" data-wall-mark-mode="right"
+                      onclick="wallStartMarkCalibration('right')"
+                      style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Marcar borda dir.</button>
+                  </div>
+                </div>
+
+                <!-- Grupo: Piso-Teto -->
+                <div style="margin-bottom:8px">
+                  <div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gray);font-weight:700;margin-bottom:6px">Piso-Teto</div>
+                  <!-- inputs ocultos mantidos para compatibilidade com JS -->
+                  <input type="range" id="wallCeilingYPct" min="0" max="95"  step="1" value="8"  style="display:none">
+                  <input type="range" id="wallFloorYPct"   min="5" max="100" step="1" value="82" style="display:none">
+                  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">
+                    <button type="button" data-wall-mark-mode="ceiling"
+                      onclick="wallStartMarkCalibration('ceiling')"
+                      style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Marcar teto</button>
+                    <button type="button" data-wall-mark-mode="floor"
+                      onclick="wallStartMarkCalibration('floor')"
+                      style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Marcar piso</button>
+                  </div>
+                </div>
+
+                <!-- Grupo: Móvel -->
+                <div style="margin-bottom:8px">
+                  <div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gray);font-weight:700;margin-bottom:6px">Móvel</div>
+                  <!-- inputs ocultos mantidos para compatibilidade com JS -->
+                  <input type="range" id="wallFurnitureTopYPct"    min="0" max="99"  step="1" value="58" style="display:none">
+                  <input type="range" id="wallFurnitureBottomYPct" min="1" max="100" step="1" value="78" style="display:none">
+                  <input type="range" id="wallFurnitureLeftXPct"   min="0" max="95"  step="1" value="20" style="display:none">
+                  <input type="range" id="wallFurnitureRightXPct"  min="5" max="100" step="1" value="80" style="display:none">
+                  <!-- Altura do móvel -->
+                  <div style="margin-bottom:6px">
+                    <div style="font-size:10px;color:var(--gray);font-weight:600;margin-bottom:4px">Altura (para calibrar escala)</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">
+                      <button type="button" data-wall-mark-mode="furnitureTop"
+                        onclick="wallStartMarkCalibration('furnitureTop')"
+                        style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Topo</button>
+                      <button type="button" data-wall-mark-mode="furnitureBottom"
+                        onclick="wallStartMarkCalibration('furnitureBottom')"
+                        style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Base</button>
+                    </div>
+                  </div>
+                  <!-- Comprimento/largura do móvel -->
+                  <div>
+                    <div style="font-size:10px;color:var(--gray);font-weight:600;margin-bottom:4px">Comprimento (para sugestão de quadro)</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">
+                      <button type="button" data-wall-mark-mode="furnitureLeft"
+                        onclick="wallStartMarkCalibration('furnitureLeft')"
+                        style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Extremidade esq.</button>
+                      <button type="button" data-wall-mark-mode="furnitureRight"
+                        onclick="wallStartMarkCalibration('furnitureRight')"
+                        style="padding:9px 8px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">📌 Extremidade dir.</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Sugestão de tamanho -->
+                <div id="wallSuggestInfo" style="display:none;margin-top:8px;font-size:11px;font-weight:700;color:rgba(90,20,140,1);background:rgba(130,60,180,0.08);border:1px solid rgba(130,60,180,0.3);border-radius:7px;padding:7px 10px;line-height:1.5"></div>
+
+                <label
+                  style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:8px 10px;margin-top:8px;cursor:pointer">
+                  <span style="font-size:11px;font-weight:700;color:var(--brown)">Exibir marcações de calibração</span>
+                  <input type="checkbox" id="wallCalibMarksVisible" checked onchange="toggleWallCalibrationMarks()"
+                    style="accent-color:var(--gold)">
+                </label>
+
+                <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+                  <div id="wallCalibMarkHint" style="font-size:11px;color:var(--gray)">Modo guiado: clique no próximo ponto sugerido no canvas (parede + móvel).</div>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <button type="button" onclick="wallClearCalibrationMarks()"
+                      style="padding:8px 10px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">Limpar marcações</button>
+                    <button type="button" onclick="wallStopMarkCalibration()"
+                      style="padding:8px 10px;border-radius:6px;border:1px solid var(--border2);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">✕ Cancelar</button>
+                    <button class="btn" style="margin:0;white-space:nowrap" onclick="wallApplyScaleCalibration(true)">Aplicar</button>
+                  </div>
+                </div>
+
+                <div id="wallScaleInfo" style="margin-top:8px;font-size:11px;color:var(--gray)">Escala ativa: 1cm = 0.00px</div>
               </div>
 
               <div class="canvas-card">

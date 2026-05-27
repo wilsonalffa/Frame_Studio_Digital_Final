@@ -59,6 +59,8 @@ const QI_PRESETS=[
 let qiFitMode='cover';
 let qiSizeLocked=true;
 let qiAspectRatio=4/3;
+let qiInitialW=null;
+let qiInitialH=null;
 let qiImageScale=1;
 let qiImageScaleX=1;
 let qiImageScaleY=1;
@@ -69,6 +71,9 @@ let qiDimensionSync=false;
 let qiRenderMetrics=null;
 let qiDragState=null;
 let qiMatColor='#FFFFFF';
+const QI_STATE_KEY='ff_qi_state_v1';
+let qiSmartSuggestion=null;
+let _qiPersistTimer=null;
 let _enhApplyTimer=null;
 let _enhApplyToken=0;
 let _qiRenderQueued=false;
@@ -504,6 +509,7 @@ function qiUpdateMeta(){
   }
   if(lockIcon) lockIcon.textContent=qiSizeLocked?'🔒':'🔓';
   const info=document.getElementById('qiInfo');
+  const liveStatus=document.getElementById('qiLiveStatus');
   const { w, h }=_qiCurrentSize();
   if(info&&validatePositiveFrameValue(w)&&validatePositiveFrameValue(h)){
     const parts=[`Area final: ${_qiRound(w)} x ${_qiRound(h)} cm`];
@@ -513,7 +519,200 @@ function qiUpdateMeta(){
     parts.push('Interacao: alcas e controles H/V');
     info.textContent=parts.join('  ·  ');
   }
+  if(liveStatus){
+    liveStatus.classList.remove('mode-cover','mode-contain');
+    liveStatus.classList.add(qiFitMode==='cover'?'mode-cover':'mode-contain');
+    const mode=qiFitMode==='cover'?'Preencher':'Encaixar';
+    const modeIcon=qiFitMode==='cover'?'▣':'□';
+    const zoom=Math.round(((qiImageScaleX+qiImageScaleY)/2)*100);
+    const offX=_qiRound(qiImageOffsetX,1);
+    const offY=_qiRound(qiImageOffsetY,1);
+    liveStatus.textContent=`${modeIcon} Encaixe: ${mode} · Zoom: ${zoom}% · Offset: ${offX} cm / ${offY} cm`;
+  }
+  qiUpdateSmartAlert();
   qiUpdateExportPresetInfo();
+  qiSchedulePersistState();
+}
+
+function qiUpdateSmartAlert(){
+  const alertEl=document.getElementById('qiSmartAlert');
+  if(!alertEl) return;
+  const spec=qiGetExportSpec();
+  if(!spec){
+    qiSmartSuggestion=null;
+    alertEl.className='qi-smart-alert hidden';
+    alertEl.textContent='';
+    return;
+  }
+
+  const avgScale=(qiImageScaleX+qiImageScaleY)/2;
+  let tone='ok';
+  let title='Boa configuração para impressão';
+  let detail=`DPI efetivo ${spec.effectiveDpi}. Enquadramento pronto para exportação.`;
+  let actionLabel='';
+  qiSmartSuggestion=null;
+
+  if(spec.effectiveDpi<150){
+    tone='danger';
+    title='Risco alto de perda de nitidez';
+    detail=`DPI efetivo ${spec.effectiveDpi}. Reduza o tamanho final em cm ou use imagem com maior resolução.`;
+    actionLabel='Aplicar tamanho recomendado';
+    qiSmartSuggestion={ type:'resizeToDpi', targetDpi:220 };
+  } else if(spec.scaled||spec.effectiveDpi<220){
+    tone='warn';
+    title='Atenção para qualidade final';
+    detail=`DPI efetivo ${spec.effectiveDpi}${spec.scaled?' (limitado por 10.000 px).':''} Pode perder definição em visualização próxima.`;
+    actionLabel='Ajustar para 220 DPI';
+    qiSmartSuggestion={ type:'resizeToDpi', targetDpi:220 };
+  } else if(avgScale>2.2){
+    tone='warn';
+    title='Zoom alto aplicado';
+    detail='Escala da imagem acima de 220%. Verifique se não há perda de detalhe nas áreas importantes.';
+    actionLabel='Voltar zoom para 100%';
+    qiSmartSuggestion={ type:'resetZoom' };
+  } else if(qiFitMode==='contain'){
+    tone='info';
+    title='Modo Encaixar ativo';
+    detail='Pode gerar margens visíveis no enquadramento. Use Preencher se quiser ocupar toda a área.';
+    actionLabel='Trocar para Preencher';
+    qiSmartSuggestion={ type:'setFitCover' };
+  }
+
+  alertEl.className=`qi-smart-alert ${tone}`;
+  if(qiSmartSuggestion&&actionLabel){
+    alertEl.innerHTML=`<strong>${title}</strong><span>${detail}</span><button class="qi-smart-action" type="button" onclick="qiApplySmartSuggestion()">${actionLabel}</button>`;
+    return;
+  }
+  alertEl.innerHTML=`<strong>${title}</strong><span>${detail}</span>`;
+}
+
+function qiApplySmartSuggestion(){
+  if(!qiSmartSuggestion) return;
+  if(qiSmartSuggestion.type==='setFitCover'){
+    qiSetFitMode('cover');
+    toast('Modo alterado para Preencher.');
+    return;
+  }
+  if(qiSmartSuggestion.type==='resetZoom'){
+    qiAdjustZoom(100);
+    toast('Zoom ajustado para 100%.');
+    return;
+  }
+  if(qiSmartSuggestion.type==='resizeToDpi'){
+    const spec=qiGetExportSpec();
+    const wEl=document.getElementById('qiW');
+    const hEl=document.getElementById('qiH');
+    if(!spec||!wEl||!hEl) return;
+    const target=Math.max(150,parseInt(qiSmartSuggestion.targetDpi)||220);
+    const ratio=Math.min(1,spec.effectiveDpi/target);
+    const nextW=Math.max(1,_qiRound(spec.wCm*ratio,1));
+    const nextH=Math.max(1,_qiRound(spec.hCm*ratio,1));
+    wEl.value=_qiFormatInput(nextW);
+    hEl.value=_qiFormatInput(nextH);
+    qiAspectRatio=Math.max(0.1,nextW/Math.max(0.1,nextH));
+    qiUpdatePresetState();
+    qiApplyToCustomCheck(true);
+    qiRenderDesigner();
+    toast(`Tamanho ajustado para aproximadamente ${target} DPI.`);
+  }
+}
+
+function _qiStateImageKey(){
+  if(!qImg) return null;
+  const name=(qImg.file?.name||'').toLowerCase();
+  return `${qImg.w}x${qImg.h}|${name}`;
+}
+
+function qiSchedulePersistState(){
+  if(_qiPersistTimer) clearTimeout(_qiPersistTimer);
+  _qiPersistTimer=setTimeout(()=>{
+    _qiPersistTimer=null;
+    qiPersistState();
+  },180);
+}
+
+function qiPersistState(){
+  if(!qImg) return;
+  const { w, h }=_qiCurrentSize();
+  if(!validatePositiveFrameValue(w)||!validatePositiveFrameValue(h)) return;
+  try{
+    const payload={
+      imageKey:_qiStateImageKey(),
+      w,
+      h,
+      fit:qiFitMode,
+      sizeLocked:qiSizeLocked,
+      aspect:qiAspectRatio,
+      scaleX:qiImageScaleX,
+      scaleY:qiImageScaleY,
+      offsetX:qiImageOffsetX,
+      offsetY:qiImageOffsetY,
+      matColor:qiMatColor,
+      initialW:qiInitialW,
+      initialH:qiInitialH,
+      customW,
+      customH,
+      savedAt:Date.now()
+    };
+    localStorage.setItem(QI_STATE_KEY,JSON.stringify(payload));
+  } catch {}
+}
+
+function _qiClampNum(v,min,max,fallback){
+  const n=parseFloat(v);
+  if(!Number.isFinite(n)) return fallback;
+  return Math.max(min,Math.min(max,n));
+}
+
+function _qiMatPresetIndex(color){
+  const list=['#FFFFFF','#F5F0E8','#E8E0D0','#D9DDE5','#111111'];
+  const normalized=String(color||'').toUpperCase();
+  return list.findIndex((item)=>item===normalized);
+}
+
+function qiRestoreStateFromStorage(){
+  if(!qImg) return false;
+  let saved;
+  try{
+    saved=JSON.parse(localStorage.getItem(QI_STATE_KEY)||'null');
+  } catch {
+    return false;
+  }
+  if(!saved||saved.imageKey!==_qiStateImageKey()) return false;
+
+  const wEl=document.getElementById('qiW');
+  const hEl=document.getElementById('qiH');
+  if(!wEl||!hEl) return false;
+
+  if(validatePositiveFrameValue(saved.initialW)&&validatePositiveFrameValue(saved.initialH)){
+    qiInitialW=saved.initialW;
+    qiInitialH=saved.initialH;
+  }
+
+  if(validatePositiveFrameValue(saved.w)&&validatePositiveFrameValue(saved.h)){
+    wEl.value=_qiFormatInput(saved.w);
+    hEl.value=_qiFormatInput(saved.h);
+  }
+
+  qiSizeLocked=Boolean(saved.sizeLocked);
+  qiAspectRatio=validatePositiveFrameValue(saved.aspect)?saved.aspect:qiAspectRatio;
+  qiFitMode=saved.fit==='contain'?'contain':'cover';
+  document.querySelectorAll('[data-qi-fit]').forEach((item)=>{
+    item.classList.toggle('active',item.dataset.qiFit===qiFitMode);
+  });
+
+  qiImageScaleX=_qiClampNum(saved.scaleX,0.35,4,1);
+  qiImageScaleY=_qiClampNum(saved.scaleY,0.35,4,1);
+  qiImageOffsetX=_qiClampNum(saved.offsetX,-10000,10000,0);
+  qiImageOffsetY=_qiClampNum(saved.offsetY,-10000,10000,0);
+  _qiSyncLegacyScale();
+
+  const color=(typeof saved.matColor==='string'&&saved.matColor.trim())?saved.matColor:'#FFFFFF';
+  qiSetMatColor(color,_qiMatPresetIndex(color));
+
+  customW=validatePositiveFrameValue(saved.customW)?saved.customW:null;
+  customH=validatePositiveFrameValue(saved.customH)?saved.customH:null;
+  return true;
 }
 
 function qiSetMatColor(color, idx){
@@ -580,17 +779,45 @@ function qiBuildExportCanvas(){
   out.width=outW;
   out.height=outH;
   const ctx=out.getContext('2d');
+  const drew=_qiDrawFramedImage(ctx, outW, outH, spec.wCm, spec.hCm);
+  if(!drew) _qiDrawLegacyPreview(ctx, outW, outH);
+  return out;
+}
+
+function _qiDrawFramedImage(ctx, outW, outH, wCm, hCm){
+  if(!ctx||!qImg) return false;
+  if(!validatePositiveFrameValue(wCm)||!validatePositiveFrameValue(hCm)) return false;
   ctx.fillStyle=qiMatColor;
   ctx.fillRect(0,0,outW,outH);
   const srcW=qImg.img.naturalWidth||qImg.img.width;
   const srcH=qImg.img.naturalHeight||qImg.img.height;
+  if(!srcW||!srcH) return false;
   const baseScale=(qiFitMode==='cover')?Math.max(outW/srcW,outH/srcH):Math.min(outW/srcW,outH/srcH);
   const drawW=Math.max(1,srcW*baseScale*qiImageScaleX);
   const drawH=Math.max(1,srcH*baseScale*qiImageScaleY);
-  const drawX=(outW-drawW)/2;
-  const drawY=(outH-drawH)/2;
+
+  const exportScaleX = outW / wCm;
+  const exportScaleY = outH / hCm;
+  const offsetPxX = qiImageOffsetX * exportScaleX;
+  const offsetPxY = qiImageOffsetY * exportScaleY;
+
+  const drawX=((outW-drawW)/2) + offsetPxX;
+  const drawY=((outH-drawH)/2) + offsetPxY;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0,0,outW,outH);
+  ctx.clip();
   ctx.drawImage(qImg.img,drawX,drawY,drawW,drawH);
-  return out;
+  ctx.restore();
+  return true;
+}
+
+function _qiDrawLegacyPreview(ctx, outW, outH){
+  if(!ctx||!qImg) return;
+  ctx.fillStyle='#FFFFFF';
+  ctx.fillRect(0,0,outW,outH);
+  ctx.drawImage(qImg.img,0,0,outW,outH);
 }
 
 function _qiEnsureSizeTagInFileName(baseName,w,h){
@@ -637,26 +864,23 @@ function _qiSyncLegacyScale(){
   qiImageScale=(qiImageScaleX+qiImageScaleY)/2;
 }
 
-function qiAdjustScaleAxis(axis,value){
+function qiAdjustZoom(value){
   const parsed=parseFloat(value);
   if(!Number.isFinite(parsed)) return;
   const scale=Math.max(35,Math.min(400,parsed))/100;
-  if(axis==='x') qiImageScaleX=scale;
-  else qiImageScaleY=scale;
+  qiImageScaleX=scale;
+  qiImageScaleY=scale;
   _qiSyncLegacyScale();
   qiRenderDesigner();
 }
 
-function qiUpdateScaleAxisControls(){
-  const xRange=document.getElementById('qiScaleX');
-  const yRange=document.getElementById('qiScaleY');
-  const xVal=document.getElementById('qiScaleXVal');
-  const yVal=document.getElementById('qiScaleYVal');
-  if(!xRange||!yRange||!xVal||!yVal) return;
-  xRange.value=String(Math.round(qiImageScaleX*100));
-  yRange.value=String(Math.round(qiImageScaleY*100));
-  xVal.textContent=Math.round(qiImageScaleX*100)+'%';
-  yVal.textContent=Math.round(qiImageScaleY*100)+'%';
+function qiUpdateZoomControl(){
+  const zoomSlider=document.getElementById('qiZoomSlider');
+  const zoomVal=document.getElementById('qiZoomVal');
+  if(!zoomSlider||!zoomVal) return;
+  const val = Math.round(((qiImageScaleX + qiImageScaleY) / 2) * 100);
+  zoomSlider.value=String(val);
+  zoomVal.textContent=val+'%';
 }
 
 function qiSetPreset(w,h){
@@ -712,9 +936,31 @@ function qiSetFitMode(mode,btn=null){
 }
 
 function qiResetTransform(){
+  const wEl=document.getElementById('qiW');
+  const hEl=document.getElementById('qiH');
+  if(wEl&&hEl&&validatePositiveFrameValue(qiInitialW)&&validatePositiveFrameValue(qiInitialH)){
+    wEl.value=_qiFormatInput(qiInitialW);
+    hEl.value=_qiFormatInput(qiInitialH);
+    qiAspectRatio=Math.max(0.1,qiInitialW/Math.max(0.1,qiInitialH));
+  }
+  qiSizeLocked=true;
+  qiFitMode='cover';
+  document.querySelectorAll('[data-qi-fit]').forEach((item)=>{
+    item.classList.toggle('active',item.dataset.qiFit===qiFitMode);
+  });
+  qiSetMatColor('#FFFFFF',0);
   qiImageScale=1;
   qiImageScaleX=1;
   qiImageScaleY=1;
+  qiImageOffsetX=0;
+  qiImageOffsetY=0;
+  qiSelectionActive=true;
+  qiUpdatePresetState();
+  qiApplyToCustomCheck(true);
+  qiRenderDesigner();
+}
+
+function qiCenterImage(){
   qiImageOffsetX=0;
   qiImageOffsetY=0;
   qiSelectionActive=true;
@@ -740,6 +986,8 @@ function qiInitFromQImage(){
   const[mw,mh]=maxPrintCm(qImg.w,qImg.h);
   const initialW=customW||mw;
   const initialH=customH||mh;
+  qiInitialW=initialW;
+  qiInitialH=initialH;
   wEl.value=_qiFormatInput(initialW);
   hEl.value=_qiFormatInput(initialH);
   qiAspectRatio=Math.max(0.1,initialW/Math.max(0.1,initialH));
@@ -753,10 +1001,12 @@ function qiInitFromQImage(){
   qiMatColor='#FFFFFF';
   qiSelectionActive=true;
   qiDragState=null;
+  const restored=qiRestoreStateFromStorage();
   qiUpdatePresetState();
-  qiSetMatColor('#FFFFFF',0);
+  if(!restored) qiSetMatColor('#FFFFFF',0);
   qiApplyToCustomCheck(false);
   qiRenderDesigner();
+  qiSchedulePersistState();
 }
 
 function _qiPointerPosition(evt){
@@ -821,6 +1071,19 @@ function initQIDesignerInteractions(){
       if(canvas.setPointerCapture) canvas.setPointerCapture(evt.pointerId);
       evt.preventDefault();
       return;
+    } else if(insideArt){
+      qiDragState={
+        mode:'pan',
+        pointerId:evt.pointerId,
+        startX:evt.clientX,
+        startY:evt.clientY,
+        startOffsetX:qiImageOffsetX,
+        startOffsetY:qiImageOffsetY
+      };
+      canvas.style.cursor='grabbing';
+      if(canvas.setPointerCapture) canvas.setPointerCapture(evt.pointerId);
+      evt.preventDefault();
+      return;
     }
 
     canvas.style.cursor='default';
@@ -834,7 +1097,7 @@ function initQIDesignerInteractions(){
       const handle=_qiHitHandle(pos,qiRenderMetrics);
       const insideArt=pos.x>=qiRenderMetrics.artX&&pos.x<=qiRenderMetrics.artX+qiRenderMetrics.artW&&pos.y>=qiRenderMetrics.artY&&pos.y<=qiRenderMetrics.artY+qiRenderMetrics.artH;
       if(handle) canvas.style.cursor=_qiCursorForHandle(handle.type);
-      else if(insideArt) canvas.style.cursor='default';
+      else if(insideArt) canvas.style.cursor='grab';
       else canvas.style.cursor='default';
       return;
     }
@@ -847,14 +1110,35 @@ function initQIDesignerInteractions(){
 
       let nextScaleX=qiDragState.startScaleX;
       let nextScaleY=qiDragState.startScaleY;
-      if(type.includes('e')) nextScaleX=qiDragState.startScaleX*(1+dx/220);
-      if(type.includes('w')) nextScaleX=qiDragState.startScaleX*(1-dx/220);
-      if(type.includes('s')) nextScaleY=qiDragState.startScaleY*(1+dy/220);
-      if(type.includes('n')) nextScaleY=qiDragState.startScaleY*(1-dy/220);
+
+      const isCorner = ['nw', 'ne', 'se', 'sw'].includes(type);
+      if(isCorner){
+        let factor = 0;
+        if(type === 'se') factor = (dx + dy) / 2;
+        else if(type === 'nw') factor = (-dx - dy) / 2;
+        else if(type === 'ne') factor = (dx - dy) / 2;
+        else if(type === 'sw') factor = (-dx + dy) / 2;
+
+        const multiplier = 1 + factor/220;
+        nextScaleX = qiDragState.startScaleX * multiplier;
+        nextScaleY = qiDragState.startScaleY * multiplier;
+      } else {
+        if(type.includes('e')) nextScaleX=qiDragState.startScaleX*(1+dx/220);
+        if(type.includes('w')) nextScaleX=qiDragState.startScaleX*(1-dx/220);
+        if(type.includes('s')) nextScaleY=qiDragState.startScaleY*(1+dy/220);
+        if(type.includes('n')) nextScaleY=qiDragState.startScaleY*(1-dy/220);
+      }
 
       qiImageScaleX=Math.max(0.35,Math.min(4,nextScaleX));
       qiImageScaleY=Math.max(0.35,Math.min(4,nextScaleY));
       _qiSyncLegacyScale();
+      qiRenderDesigner();
+    } else if(qiDragState.mode==='pan'){
+      const dx=evt.clientX-qiDragState.startX;
+      const dyVal=evt.clientY-qiDragState.startY;
+      const artScale = qiRenderMetrics.artScale || (qiRenderMetrics.artW / parseFloat(document.getElementById('qiW').value));
+      qiImageOffsetX=qiDragState.startOffsetX + (dx / artScale);
+      qiImageOffsetY=qiDragState.startOffsetY + (dyVal / artScale);
       qiRenderDesigner();
     }
   });
@@ -917,11 +1201,14 @@ function _qiRenderDesignerNow(){
   const drawW=Math.max(1,srcW*baseScale*qiImageScaleX);
   const drawH=Math.max(1,srcH*baseScale*qiImageScaleY);
 
-  qiRenderMetrics={ artX, artY, artW, artH, drawW, drawH, handleSize:8 };
-  qiUpdateScaleAxisControls();
+  qiRenderMetrics={ artX, artY, artW, artH, drawW, drawH, handleSize:8, artScale };
+  qiUpdateZoomControl();
 
-  const drawX=artX+((artW-drawW)/2);
-  const drawY=artY+((artH-drawH)/2);
+  const offsetPxX = qiImageOffsetX * artScale;
+  const offsetPxY = qiImageOffsetY * artScale;
+
+  const drawX=artX+((artW-drawW)/2) + offsetPxX;
+  const drawY=artY+((artH-drawH)/2) + offsetPxY;
 
   ctx.save();
   ctx.beginPath();
@@ -987,8 +1274,12 @@ function checkCustom(){
   let dw,dh;
   if(w>=h){ dw=maxS; dh=dw/ratio; } else { dh=maxS; dw=dh*ratio; }
   cvs.width=dw; cvs.height=dh;
-  ctx.fillStyle='#FFFFFF'; ctx.fillRect(0,0,dw,dh);
-  ctx.drawImage(qImg.img,0,0,dw,dh);
+  try{
+    const drew=_qiDrawFramedImage(ctx,dw,dh,w,h);
+    if(!drew) _qiDrawLegacyPreview(ctx,dw,dh);
+  } catch {
+    _qiDrawLegacyPreview(ctx,dw,dh);
+  }
   ctx.strokeStyle='rgba(26,48,81,0.25)'; ctx.lineWidth=1;
   ctx.strokeRect(0,0,dw,dh);
   document.getElementById('cPreview').style.display='block';
@@ -1010,8 +1301,12 @@ function openPreviewModal(){
   if(dh>mH){ dh=mH; dw=dh*(w/h); }
 
   cvs.width=Math.round(dw); cvs.height=Math.round(dh);
-  ctx.fillStyle='#FFFFFF'; ctx.fillRect(0,0,cvs.width,cvs.height);
-  ctx.drawImage(qImg.img,0,0,cvs.width,cvs.height);
+  try{
+    const drew=_qiDrawFramedImage(ctx,cvs.width,cvs.height,w,h);
+    if(!drew) _qiDrawLegacyPreview(ctx,cvs.width,cvs.height);
+  } catch {
+    _qiDrawLegacyPreview(ctx,cvs.width,cvs.height);
+  }
   ctx.strokeStyle='rgba(26,48,81,0.5)'; ctx.lineWidth=3;
   ctx.strokeRect(1.5,1.5,cvs.width-3,cvs.height-3);
 
