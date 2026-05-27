@@ -292,7 +292,6 @@ function _extractCmSizeFromFileName(name){
   if(!match){
     match=normalized.match(/(?:^|[^a-zA-Z0-9])(\d+(?:[.,]\d+)?)\s*(?:x|X|×)\s*(\d+(?:[.,]\d+)?)(?=$|[^a-zA-Z0-9])/i);
   }
-  }
   if(!match) return null;
   const w=parseFloat(match[1].replace(',','.'));
   const h=parseFloat(match[2].replace(',','.'));
