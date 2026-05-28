@@ -1551,6 +1551,24 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                   </div>
                 </div>
 
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px">
+                  <div class="field">
+                    <label style="display:block;min-height:30px;line-height:1.2">Base da sugestão</label>
+                    <select id="wallSuggestMode" onchange="wallApplyScaleCalibration()"
+                      style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:7px 9px;border-radius:4px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                      <option value="auto" selected>Automático (móvel ou parede)</option>
+                      <option value="furniture">Com móvel (70% da largura)</option>
+                      <option value="wall">Sem móvel (regra 60-75%)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label style="display:block;min-height:30px;line-height:1.2">Proporção (%)</label>
+                    <input type="number" id="wallGoldenTargetPct" min="60" max="75" step="1" value="67"
+                      onchange="wallApplyScaleCalibration()" onblur="wallApplyScaleCalibration()"
+                      style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:7px 9px;border-radius:4px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  </div>
+                </div>
+
                 <!-- Fluxo guiado -->
                 <div style="font-size:11px;color:var(--gray);line-height:1.45;background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:8px 10px;margin-bottom:10px">
                   <div id="wallCalibProgress" style="font-size:12px;font-weight:700;color:var(--brown)">Progresso: 0/8 pontos da marcação guiada</div>

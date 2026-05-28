@@ -53,6 +53,8 @@ let wallFurnitureTopYPct = 58;
 let wallFurnitureBottomYPct = 78;
 let wallFurnitureLeftXPct = 20;  // extremidade esquerda do móvel (%)
 let wallFurnitureRightXPct = 80; // extremidade direita do móvel (%)
+let wallSuggestMode = 'auto'; // auto|furniture|wall
+let wallGoldenTargetPct = 67; // alvo dentro da regra de ouro (60-75%)
 let wallCalibMarkMode = ''; // left|right|ceiling|floor|furnitureTop|furnitureBottom|furnitureLeft|furnitureRight
 let wallCalibrationMarksVisible = true; // exibe/oculta marcações de calibração
 let wallCalibMarks = {
@@ -67,6 +69,9 @@ let wallCalibMarks = {
 };
 const WALL_ESSENTIAL_MARKS = ['left', 'right', 'ceiling', 'floor'];
 const WALL_GUIDED_MARKS = ['left', 'right', 'ceiling', 'floor', 'furnitureTop', 'furnitureBottom', 'furnitureLeft', 'furnitureRight'];
+const WALL_GOLDEN_MIN_PCT = 60;
+const WALL_GOLDEN_MAX_PCT = 75;
+const WALL_AUTO_WALL_TARGET_PCT = 70;
 
 // Marca d'agua da simulacao de ambiente
 let wallWatermarkEnabled = false;
@@ -232,6 +237,52 @@ function _wallGetHorizontalPpc(cW, cH) {
   return _wallComputePpc(cW, cH, false).ppc;
 }
 
+function _wallGetSelectedRatio() {
+  if (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length) {
+    const f = wallFrames[wallSelectedIdx];
+    if (f && isFinite(f.wCm) && isFinite(f.hCm) && f.wCm > 0 && f.hCm > 0) {
+      return f.wCm / f.hCm;
+    }
+  }
+  return 3 / 2;
+}
+
+function _wallGetSuggestMode(useInputValues = false) {
+  if (!useInputValues) return wallSuggestMode;
+  const el = document.getElementById('wallSuggestMode');
+  const val = String(el?.value || '').trim();
+  if (val === 'furniture' || val === 'wall' || val === 'auto') return val;
+  return wallSuggestMode;
+}
+
+function _wallGetGoldenTargetPct(useInputValues = false) {
+  if (!useInputValues) return wallGoldenTargetPct;
+  const parsed = _wallParseInputNum('wallGoldenTargetPct', WALL_GOLDEN_MIN_PCT, WALL_GOLDEN_MAX_PCT);
+  return parsed == null ? wallGoldenTargetPct : parsed;
+}
+
+function _wallBuildSizeSuggestionForRatio(baseWidthCm, baseHeightCm, ratio, targetPct) {
+  if (!isFinite(baseWidthCm) || !isFinite(baseHeightCm) || baseWidthCm <= 0 || baseHeightCm <= 0 || !isFinite(ratio) || ratio <= 0) {
+    return null;
+  }
+
+  const minW = Math.round(Math.min(baseWidthCm * (WALL_GOLDEN_MIN_PCT / 100), baseHeightCm * (WALL_GOLDEN_MIN_PCT / 100) * ratio));
+  const maxW = Math.round(Math.min(baseWidthCm * (WALL_GOLDEN_MAX_PCT / 100), baseHeightCm * (WALL_GOLDEN_MAX_PCT / 100) * ratio));
+  const preferredW = Math.round(Math.min(baseWidthCm * (targetPct / 100), baseHeightCm * (targetPct / 100) * ratio));
+
+  const safeMinW = Math.max(20, minW);
+  const safeMaxW = Math.max(safeMinW, maxW);
+  const safePreferredW = _wallClamp(preferredW, safeMinW, safeMaxW);
+  const preferredH = Math.max(20, Math.round(safePreferredW / ratio));
+
+  return {
+    minWidthCm: safeMinW,
+    maxWidthCm: safeMaxW,
+    preferredWidthCm: safePreferredW,
+    preferredHeightCm: preferredH,
+  };
+}
+
 function _wallGetFurnitureSuggestion(cW, cH) {
   const fL = wallCalibMarks.furnitureLeft;
   const fR = wallCalibMarks.furnitureRight;
@@ -249,8 +300,11 @@ function _wallGetFurnitureSuggestion(cW, cH) {
   const suggestedWidthCm = Math.max(28, Math.round(furnitureWidthCm * 0.70));
   const suggestedHeight3x2 = Math.max(20, Math.round(suggestedWidthCm * 2 / 3));
   const suggestedHeight4x3 = Math.max(20, Math.round(suggestedWidthCm * 3 / 4));
+  const selectedRatio = _wallGetSelectedRatio();
+  const suggestedHeightCurrentCm = Math.max(20, Math.round(suggestedWidthCm / selectedRatio));
 
   return {
+    kind: 'furniture',
     xL,
     xR,
     yRef,
@@ -258,7 +312,64 @@ function _wallGetFurnitureSuggestion(cW, cH) {
     suggestedWidthCm,
     suggestedHeight3x2,
     suggestedHeight4x3,
+    suggestedHeightCurrentCm,
+    panelText: `Móvel ≈ ${furnitureWidthCm} cm → Arte: ${suggestedWidthCm}×${suggestedHeight3x2}cm (3:2) ou ${suggestedWidthCm}×${suggestedHeight4x3}cm (4:3)`,
+    overlayText: `📐 Móvel ≈ ${furnitureWidthCm}cm  →  Arte sugerida: ${suggestedWidthCm}×${suggestedHeight3x2}cm (3:2)  ou  ${suggestedWidthCm}×${suggestedHeight4x3}cm (4:3)`,
   };
+}
+
+function _wallGetWallGoldenSuggestion(cW, cH, useInputValues = false, forcedTargetPct = null) {
+  const cfg = _wallCurrentCalibState(useInputValues);
+  if (!isFinite(cfg.widthCm) || cfg.widthCm <= 0 || !isFinite(cfg.heightCm) || cfg.heightCm <= 0) return null;
+
+  const rawTargetPct = forcedTargetPct == null
+    ? _wallGetGoldenTargetPct(useInputValues)
+    : forcedTargetPct;
+  const targetPct = _wallClamp(rawTargetPct, WALL_GOLDEN_MIN_PCT, WALL_GOLDEN_MAX_PCT);
+  const ratioCurrent = _wallGetSelectedRatio();
+  const sCurrent = _wallBuildSizeSuggestionForRatio(cfg.widthCm, cfg.heightCm, ratioCurrent, targetPct);
+  const s3x2 = _wallBuildSizeSuggestionForRatio(cfg.widthCm, cfg.heightCm, 3 / 2, targetPct);
+  const s4x3 = _wallBuildSizeSuggestionForRatio(cfg.widthCm, cfg.heightCm, 4 / 3, targetPct);
+  if (!sCurrent || !s3x2 || !s4x3) return null;
+
+  const leftMark = wallCalibMarks.left;
+  const rightMark = wallCalibMarks.right;
+  const xL = leftMark ? Math.round((leftMark.xPct / 100) * cW) : Math.round((cfg.leftX / 100) * cW);
+  const xR = rightMark ? Math.round((rightMark.xPct / 100) * cW) : Math.round((cfg.rightX / 100) * cW);
+  const yLBase = leftMark ? Math.round((leftMark.yPct / 100) * cH) : Math.round((cfg.floorY / 100) * cH);
+  const yRBase = rightMark ? Math.round((rightMark.yPct / 100) * cH) : Math.round((cfg.floorY / 100) * cH);
+  const yLeftRef = _wallClamp(yLBase + 14, 0, cH - 1);
+  const yRightRef = _wallClamp(yRBase + 14, 0, cH - 1);
+  const yRef = Math.round((yLeftRef + yRightRef) / 2);
+  const rangeText = `${sCurrent.minWidthCm}-${sCurrent.maxWidthCm}cm`;
+
+  return {
+    kind: 'wall',
+    xL,
+    xR,
+    yLeftRef,
+    yRightRef,
+    yRef,
+    wallWidthCm: Math.round(cfg.widthCm),
+    wallHeightCm: Math.round(cfg.heightCm),
+    suggestedWidthCm: sCurrent.preferredWidthCm,
+    suggestedHeightCurrentCm: sCurrent.preferredHeightCm,
+    suggestedHeight3x2: s3x2.preferredHeightCm,
+    suggestedHeight4x3: s4x3.preferredHeightCm,
+    minWidthCm: sCurrent.minWidthCm,
+    maxWidthCm: sCurrent.maxWidthCm,
+    targetPct,
+    panelText: `Parede ${Math.round(cfg.widthCm)}×${Math.round(cfg.heightCm)} cm · Regra ${WALL_GOLDEN_MIN_PCT}-${WALL_GOLDEN_MAX_PCT}%: ${rangeText} · Sugestão (${Math.round(targetPct)}%): ${sCurrent.preferredWidthCm}×${sCurrent.preferredHeightCm}cm`,
+    overlayText: `📏 Parede ${Math.round(cfg.widthCm)}×${Math.round(cfg.heightCm)}cm  ·  Regra ${WALL_GOLDEN_MIN_PCT}-${WALL_GOLDEN_MAX_PCT}%: ${rangeText}  ·  Sugestão ${sCurrent.preferredWidthCm}×${sCurrent.preferredHeightCm}cm`,
+  };
+}
+
+function _wallGetActiveSuggestion(cW, cH, useInputValues = false) {
+  const mode = _wallGetSuggestMode(useInputValues);
+  if (mode === 'furniture') return _wallGetFurnitureSuggestion(cW, cH);
+  if (mode === 'wall') return _wallGetWallGoldenSuggestion(cW, cH, useInputValues);
+  return _wallGetFurnitureSuggestion(cW, cH)
+    || _wallGetWallGoldenSuggestion(cW, cH, useInputValues, WALL_AUTO_WALL_TARGET_PCT);
 }
 
 function _wallGetVisibleBoundsPct() {
@@ -506,6 +617,9 @@ function wallStopMarkCalibration() {
 function toggleWallCalibrationMarks() {
   const cb = document.getElementById('wallCalibMarksVisible');
   wallCalibrationMarksVisible = !!(cb && cb.checked);
+  if (!wallCalibrationMarksVisible && wallCalibMarkMode) {
+    wallStopMarkCalibration();
+  }
   renderWall();
 }
 
@@ -645,6 +759,9 @@ function wallApplyScaleCalibration(shouldAutoResize = false) {
   const furnitureBottomY = _wallParseInputNum('wallFurnitureBottomYPct', 1, 100);
   const furnitureLeftX = _wallParseInputNum('wallFurnitureLeftXPct', 0, 95);
   const furnitureRightX = _wallParseInputNum('wallFurnitureRightXPct', 5, 100);
+  const suggestModeEl = document.getElementById('wallSuggestMode');
+  const suggestMode = String(suggestModeEl?.value || '').trim();
+  const goldenTargetPct = _wallParseInputNum('wallGoldenTargetPct', WALL_GOLDEN_MIN_PCT, WALL_GOLDEN_MAX_PCT);
 
   if (widthCm != null) wallVisibleWidthCm = widthCm;
   if (heightCm != null) wallVisibleHeightCm = heightCm;
@@ -657,6 +774,8 @@ function wallApplyScaleCalibration(shouldAutoResize = false) {
   if (furnitureBottomY != null) wallFurnitureBottomYPct = furnitureBottomY;
   if (furnitureLeftX != null) wallFurnitureLeftXPct = furnitureLeftX;
   if (furnitureRightX != null) wallFurnitureRightXPct = furnitureRightX;
+  if (suggestMode === 'auto' || suggestMode === 'furniture' || suggestMode === 'wall') wallSuggestMode = suggestMode;
+  if (goldenTargetPct != null) wallGoldenTargetPct = goldenTargetPct;
 
   // Garantir ordem dos intervalos horizontais
   if (wallRightXPct <= wallLeftXPct + 3) {
@@ -689,6 +808,8 @@ function wallApplyScaleCalibration(shouldAutoResize = false) {
   setVal('wallFurnitureBottomYPct', wallFurnitureBottomYPct);
   setVal('wallFurnitureLeftXPct', wallFurnitureLeftXPct);
   setVal('wallFurnitureRightXPct', wallFurnitureRightXPct);
+  setVal('wallGoldenTargetPct', wallGoldenTargetPct);
+  if (suggestModeEl) suggestModeEl.value = wallSuggestMode;
   _wallSyncCalibrationLabels();
 
   _wallCenterSelectedFrameOnIdealHeight();
@@ -704,23 +825,24 @@ function wallApplyScaleCalibration(shouldAutoResize = false) {
   if (shouldAutoResize) {
     const cvs = document.getElementById('wallCanvas');
     if (cvs && cvs.width > 0 && wallFrames.length > 0) {
-      const suggestion = _wallGetFurnitureSuggestion(cvs.width, cvs.height);
+      const suggestion = _wallGetActiveSuggestion(cvs.width, cvs.height, false);
       if (suggestion) {
         const idx = (wallSelectedIdx >= 0 && wallSelectedIdx < wallFrames.length)
           ? wallSelectedIdx
           : 0;
         const f = wallFrames[idx];
-        const ratio = (f && f.hCm > 0) ? (f.wCm / f.hCm) : (3 / 2);
-        const h3x2Ratio = 3 / 2;
-        const h4x3Ratio = 4 / 3;
-        const choose3x2 = Math.abs(ratio - h3x2Ratio) <= Math.abs(ratio - h4x3Ratio);
 
         f.wCm = suggestion.suggestedWidthCm;
-        f.hCm = choose3x2 ? suggestion.suggestedHeight3x2 : suggestion.suggestedHeight4x3;
+        f.hCm = suggestion.suggestedHeightCurrentCm
+          ? suggestion.suggestedHeightCurrentCm
+          : suggestion.suggestedHeight3x2;
 
         wallSelectedIdx = idx;
         _wallUpdatePanelFromSelected();
-        toast(`Quadro ajustado para ${f.wCm}x${f.hCm}cm (sugestao automatica).`);
+        const modeLabel = suggestion.kind === 'wall' ? 'regra 60-75% da parede' : 'móvel';
+        toast(`Quadro ajustado para ${f.wCm}x${f.hCm}cm (base: ${modeLabel}).`);
+      } else if (_wallGetSuggestMode(false) === 'furniture') {
+        toast('Para usar o modo com móvel, marque as extremidades esquerda e direita do móvel.');
       }
     }
   }
@@ -839,34 +961,34 @@ function _wallDrawCalibrationOverlay(ctx, cW, cH) {
     }
   }
 
-  // ── Indicador de largura do móvel e sugestão de tamanho ──
-  const suggestion = _wallGetFurnitureSuggestion(cW, cH);
+  // ── Indicador de referência e sugestão de tamanho ──
+  const suggestion = _wallGetActiveSuggestion(cW, cH, false);
   if (suggestion) {
     const xL = suggestion.xL;
     const xR = suggestion.xR;
     const yRef = suggestion.yRef;
+    const yL = (typeof suggestion.yLeftRef === 'number') ? suggestion.yLeftRef : yRef;
+    const yR = (typeof suggestion.yRightRef === 'number') ? suggestion.yRightRef : yRef;
+    const yMid = Math.round((yL + yR) / 2);
 
       // Linha de cota
       ctx.save();
-      ctx.strokeStyle = 'rgba(130, 60, 180, 0.85)';
+      const isWallMode = suggestion.kind === 'wall';
+      ctx.strokeStyle = isWallMode ? 'rgba(184, 144, 60, 0.88)' : 'rgba(130, 60, 180, 0.85)';
       ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(xL, yRef - 5); ctx.lineTo(xL, yRef + 5); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(xR, yRef - 5); ctx.lineTo(xR, yRef + 5); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(xL, yRef); ctx.lineTo(xR, yRef); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xL, yL - 5); ctx.lineTo(xL, yL + 5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xR, yR - 5); ctx.lineTo(xR, yR + 5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xL, yL); ctx.lineTo(xR, yR); ctx.stroke();
 
-      // Cálculo e sugestão
-      const furWidthCm = suggestion.furnitureWidthCm;
-      const sugW = suggestion.suggestedWidthCm;
-      const sugH3x2 = suggestion.suggestedHeight3x2;
-      const sugH4x3 = suggestion.suggestedHeight4x3;
-      const sugText = `📐 Móvel ≈ ${furWidthCm}cm  →  Arte sugerida: ${sugW}×${sugH3x2}cm (3:2)  ou  ${sugW}×${sugH4x3}cm (4:3)`;
+      const sugText = suggestion.overlayText;
       ctx.font = "600 11px 'Avenir','Nunito',sans-serif";
       const stw = ctx.measureText(sugText).width;
-      const sx = Math.max(4, Math.min(xL, cW - stw - 12));
-      const sy = yRef + 6;
+      const xMid = Math.round((xL + xR) / 2);
+      const sx = Math.max(4, Math.min(xMid - Math.round(stw / 2), cW - stw - 12));
+      const sy = yMid + 6;
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
       ctx.fillRect(sx - 4, sy - 1, stw + 8, 15);
-      ctx.fillStyle = 'rgba(90, 20, 140, 1)';
+      ctx.fillStyle = isWallMode ? 'rgba(140, 100, 20, 1)' : 'rgba(90, 20, 140, 1)';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillText(sugText, sx, sy);
@@ -874,13 +996,26 @@ function _wallDrawCalibrationOverlay(ctx, cW, cH) {
       // Atualizar painel
       const info = document.getElementById('wallSuggestInfo');
       if (info) {
-        info.textContent = `Móvel ≈ ${furWidthCm} cm → Arte: ${sugW}×${sugH3x2}cm (3:2) ou ${sugW}×${sugH4x3}cm (4:3)`;
+        info.textContent = suggestion.panelText;
+        info.style.color = isWallMode ? 'rgba(140,100,20,1)' : 'rgba(90,20,140,1)';
+        info.style.background = isWallMode ? 'rgba(184,144,60,0.10)' : 'rgba(130,60,180,0.08)';
+        info.style.borderColor = isWallMode ? 'rgba(184,144,60,0.35)' : 'rgba(130,60,180,0.30)';
         info.style.display = 'block';
       }
       ctx.restore();
   } else {
     const info = document.getElementById('wallSuggestInfo');
-    if (info) info.style.display = 'none';
+    if (info) {
+      if (_wallGetSuggestMode(false) === 'furniture') {
+        info.textContent = 'Modo com móvel ativo: marque as extremidades esquerda e direita do móvel para gerar a sugestão.';
+        info.style.color = 'rgba(90,20,140,1)';
+        info.style.background = 'rgba(130,60,180,0.08)';
+        info.style.borderColor = 'rgba(130,60,180,0.30)';
+        info.style.display = 'block';
+      } else {
+        info.style.display = 'none';
+      }
+    }
   }
 
   ctx.restore();
@@ -1201,7 +1336,7 @@ function _wallDoRender() {
     _wallDrawGuides(ctx, cvs.width, cvs.height);
   }
 
-  if (wallCalibrationMarksVisible || wallCalibMarkMode) {
+  if (wallCalibrationMarksVisible) {
     _wallDrawCalibrationOverlay(ctx, cvs.width, cvs.height);
   } else {
     const info = document.getElementById('wallSuggestInfo');
