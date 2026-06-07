@@ -9,5 +9,5 @@ psycopg[binary]==3.3.3
 Pillow==11.2.1
 gunicorn==23.0.0
 simple-websocket==1.1.0
-rawpy==0.24.0
+rawpy==0.27.0
 
