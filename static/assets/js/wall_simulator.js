@@ -2150,11 +2150,27 @@ function loadArt(e) {
   if (!files.length) return;
 
   files.forEach((file) => {
-    const run = (blob) => {
+    const run = (preparedFile) => {
+      const blob = (preparedFile instanceof Blob) ? preparedFile : file;
       const img = new Image();
       img.onload = () => wallAddFrame(img);
+      img.onerror = () => toast('Nao foi possivel abrir uma das artes selecionadas.');
       img.src = URL.createObjectURL(blob);
     };
+    if (typeof _ffPrepareImageFile === 'function') {
+      _ffPrepareImageFile(file)
+        .then(run)
+        .catch((err) => {
+          console.error('Falha ao preparar arte para simulacao', err);
+          if (typeof _isDngLike === 'function' && _isDngLike(file)) {
+            toast('Nao foi possivel abrir um arquivo DNG neste dispositivo.');
+          } else {
+            toast('Nao foi possivel abrir uma das artes selecionadas.');
+          }
+        });
+      return;
+    }
+
     (file.type === 'image/heic' || file.type === 'image/heif')
       ? heic2any({ blob: file, toType: 'image/jpeg', quality: .9 }).then(run)
       : run(file);

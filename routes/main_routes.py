@@ -1,8 +1,15 @@
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, current_app
+from io import BytesIO
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, current_app, send_file
 from werkzeug.security import check_password_hash
+from PIL import Image, UnidentifiedImageError
 from core.db import get_db, get_user_row_by_username
 from core.auth import set_session_user, clear_session_user, get_authenticated_user, login_required
 from core.utils import now_iso, row_to_user
+
+try:
+    import rawpy
+except Exception:
+    rawpy = None
 
 main_bp = Blueprint('main', __name__)
 
@@ -61,3 +68,68 @@ def auth_me():
             'store_name': user['store_name'],
         }
     })
+
+
+@main_bp.route('/api/convert-dng', methods=['POST'])
+@login_required
+def convert_dng():
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'Arquivo nao enviado.'}), 400
+
+    filename = (file.filename or '').lower()
+    mime_type = (file.mimetype or '').lower()
+    is_dng = filename.endswith('.dng') or 'dng' in mime_type
+    if not is_dng:
+        return jsonify({'error': 'Formato invalido. Envie um arquivo DNG.'}), 400
+
+    payload = file.read()
+    if not payload:
+        return jsonify({'error': 'Arquivo vazio.'}), 400
+
+    output_format = (request.form.get('output') or 'png').strip().lower()
+    if output_format not in {'png', 'jpeg', 'jpg'}:
+        output_format = 'png'
+
+    def _send_converted(img_obj):
+        rgb = img_obj.convert('RGB')
+        out = BytesIO()
+
+        if output_format == 'png':
+            # PNG e lossless e evita artefatos de compressao para impressao.
+            rgb.save(out, format='PNG', optimize=False, compress_level=1)
+            mime = 'image/png'
+        else:
+            # Fallback JPEG com configuracao de maxima fidelidade possivel.
+            rgb.save(out, format='JPEG', quality=100, subsampling=0, optimize=False)
+            mime = 'image/jpeg'
+
+        out.seek(0)
+        return send_file(out, mimetype=mime)
+
+    # Caminho rapido: alguns DNGs sao lidos diretamente pelo Pillow.
+    try:
+        with Image.open(BytesIO(payload)) as img:
+            return _send_converted(img)
+    except (UnidentifiedImageError, OSError):
+        pass
+    except Exception:
+        pass
+
+    if rawpy is None:
+        return jsonify({
+            'error': 'Nao foi possivel converter o DNG neste servidor.',
+            'details': 'Dependencia rawpy ausente para fallback de RAW.'
+        }), 500
+
+    try:
+        with rawpy.imread(BytesIO(payload)) as raw:
+            rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8)
+
+        img = Image.fromarray(rgb)
+        return _send_converted(img)
+    except Exception as exc:
+        return jsonify({
+            'error': 'Falha ao converter DNG.',
+            'details': str(exc)
+        }), 500

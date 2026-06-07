@@ -278,6 +278,68 @@ function dod(e,zid,type){
 function loadQ(e){ loadImgFile(e.target.files[0],'q'); }
 function loadC(e){ loadImgFile(e.target.files[0],'c'); }
 
+function _isHeicLike(file){
+  if(!file) return false;
+  const type=String(file.type||'').toLowerCase();
+  const name=String(file.name||'').toLowerCase();
+  return type==='image/heic'||type==='image/heif'||name.endsWith('.heic')||name.endsWith('.heif');
+}
+
+function _isDngLike(file){
+  if(!file) return false;
+  const type=String(file.type||'').toLowerCase();
+  const name=String(file.name||'').toLowerCase();
+  return type.includes('dng')||name.endsWith('.dng');
+}
+
+function _blobToPreparedFile(blob, originalName){
+  const safeBase=String(originalName||'imagem')
+    .replace(/\.[^.]+$/,'')
+    .replace(/[^a-zA-Z0-9\-_]+/g,'-')
+    .replace(/-+/g,'-')
+    .replace(/^-|-$/g,'') || 'imagem';
+
+  const type=String(blob?.type||'').toLowerCase();
+  const ext=(type==='image/png')?'png':'jpg';
+  const mime=(type==='image/png')?'image/png':'image/jpeg';
+  return new File([blob], `${safeBase}.${ext}`, { type:mime });
+}
+
+async function _convertDngToBlob(file){
+  const fd=new FormData();
+  fd.append('file', file, file.name||'arquivo.dng');
+  fd.append('output', 'png');
+  const resp=await fetch('/api/convert-dng', {
+    method:'POST',
+    body:fd,
+    credentials:'same-origin'
+  });
+  if(!resp.ok){
+    let detail='Falha ao converter DNG.';
+    try{
+      const data=await resp.json();
+      detail=data?.details||data?.error||detail;
+    }catch(_e){
+      // sem detalhes json
+    }
+    throw new Error(detail);
+  }
+  return await resp.blob();
+}
+
+async function _ffPrepareImageFile(file){
+  if(!file) return null;
+  if(_isHeicLike(file)){
+    const blob=await heic2any({blob:file,toType:'image/jpeg',quality:.9});
+    return _blobToPreparedFile(blob, file.name);
+  }
+  if(_isDngLike(file)){
+    const blob=await _convertDngToBlob(file);
+    return _blobToPreparedFile(blob, file.name);
+  }
+  return file;
+}
+
 function _extractCmSizeFromFileName(name){
   if(!name) return null;
   const normalized=String(name)
@@ -318,12 +380,13 @@ function loadImgFile(file,type){
   if(file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf')){
     loadPDF(file,type); return;
   }
-  const run=(blob)=>{
+  const run=(preparedFile)=>{
+    const blob=(preparedFile instanceof Blob)?preparedFile:file;
     const imgEl=new Image();
     imgEl.onload=()=>{
-      const d2={img:imgEl,file,w:imgEl.naturalWidth,h:imgEl.naturalHeight};
+      const d2={img:imgEl,file:preparedFile||file,w:imgEl.naturalWidth,h:imgEl.naturalHeight};
       if(type==='q'){
-        const inferredSize=inferredSizeByName||_inferCmFromExportedPixels(file.name,imgEl.naturalWidth,imgEl.naturalHeight);
+        const inferredSize=inferredSizeByName||_inferCmFromExportedPixels((preparedFile?.name||file.name),imgEl.naturalWidth,imgEl.naturalHeight);
         customW=inferredSize?inferredSize.w:null;
         customH=inferredSize?inferredSize.h:null;
         qImg=d2;
@@ -332,11 +395,16 @@ function loadImgFile(file,type){
       else if(type==='sq'){ sqImg=d2; showSQ(); }
       else           { cImg=d2; showC(); }
     };
+    imgEl.onerror=()=>toast('Este arquivo de imagem nao pode ser aberto neste dispositivo.');
     imgEl.src=URL.createObjectURL(blob);
   };
-  (file.type==='image/heic'||file.type==='image/heif')
-    ? heic2any({blob:file,toType:'image/jpeg',quality:.9}).then(run)
-    : run(file);
+  _ffPrepareImageFile(file)
+    .then(run)
+    .catch((err)=>{
+      console.error('Falha ao preparar imagem', err);
+      if(_isDngLike(file)) toast('Nao foi possivel abrir este DNG aqui. Tente outro DNG ou converta para JPG.');
+      else toast('Nao foi possivel abrir a imagem selecionada.');
+    });
 }
 
 function loadPDF(file,type){
@@ -2763,8 +2831,20 @@ function generateRoomCanvas(key){
 // loadEnv permanece; loadArt, checkWall, renderWall, setWallFrameColor → wall_simulator.js
 function loadEnv(e){
   const file=e.target.files[0]; if(!file) return;
-  const run=(blob)=>{ const img=new Image(); img.onload=()=>{ wEnvImg=img; checkWall(); }; img.src=URL.createObjectURL(blob); };
-  (file.type==='image/heic'||file.type==='image/heif') ? heic2any({blob:file,toType:'image/jpeg',quality:.9}).then(run) : run(file);
+  const run=(preparedFile)=>{
+    const blob=(preparedFile instanceof Blob)?preparedFile:file;
+    const img=new Image();
+    img.onload=()=>{ wEnvImg=img; checkWall(); };
+    img.onerror=()=>toast('Nao foi possivel abrir a imagem do ambiente.');
+    img.src=URL.createObjectURL(blob);
+  };
+  _ffPrepareImageFile(file)
+    .then(run)
+    .catch((err)=>{
+      console.error('Falha ao preparar ambiente', err);
+      if(_isDngLike(file)) toast('DNG do ambiente nao suportado neste dispositivo.');
+      else toast('Falha ao abrir imagem do ambiente.');
+    });
 }
 
 // checkWall, togglePP, setPPColor, renderWall, dlWall → wall_simulator.js
