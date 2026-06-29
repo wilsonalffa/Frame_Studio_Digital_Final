@@ -3090,7 +3090,21 @@ function ensureEnhRemotePreference(){
 function updateEnhRemoteInfo(){
   const cb=document.getElementById('enhUseRemote');
   const info=document.getElementById('enhRemoteInfo');
+  const badge=document.getElementById('enhModeBadge');
   if(cb) cb.checked=Boolean(enhRemoteEnabled);
+  if(badge){
+    if(enhRemoteEnabled){
+      badge.textContent='IA ativa';
+      badge.style.background='#FFF7E8';
+      badge.style.color='#6F4A1E';
+      badge.style.borderColor='#EBD9B7';
+    } else {
+      badge.textContent='Local';
+      badge.style.background='#EEF6F0';
+      badge.style.color='#245A38';
+      badge.style.borderColor='#CFE5D7';
+    }
+  }
   if(info){
     info.textContent=enhRemoteEnabled
       ? 'IA externa ativada. O uso de crédito só ocorre quando ela for realmente acionada.'
