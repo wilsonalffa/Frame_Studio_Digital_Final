@@ -3145,6 +3145,14 @@ function updateScaleInfo(){
   document.getElementById('enhScaleInfo').textContent=`Saída: ${nw.toLocaleString()} × ${nh.toLocaleString()} px · ${mode}`;
 }
 
+function showEnhancementPopup(message, title='Atenção no melhorador'){
+  try{
+    window.alert(`${title}\n\n${message}`);
+  } catch {
+    toast(message);
+  }
+}
+
 function qiCanProcessLocally(w,h){
   if(!Number.isFinite(w)||!Number.isFinite(h)||w<=0||h<=0) return false;
   if(Math.max(w,h)>ENH_LOCAL_MAX_SIDE) return false;
@@ -3198,7 +3206,7 @@ async function applyEnhancement(){
             throw new Error('REMOTE_SIZE_LIMIT');
           }
           console.warn('Falha no upscaling remoto, usando fluxo local.', err);
-          toast('IA externa indisponivel. Voltando para o modo local classico.');
+          showEnhancementPopup('IA externa indisponível no momento. O sistema voltou automaticamente para o modo local.', 'IA externa indisponível');
         }
       }
 
@@ -3298,14 +3306,14 @@ async function applyEnhancement(){
     } catch (err){
       console.error('Falha no melhorador de imagem:', err);
       if(String(err?.message||'').includes('REMOTE_SIZE_LIMIT')){
-        toast('A IA externa recusou a imagem por tamanho. Para este arquivo, reduza a escala ou use uma versao menor antes de melhorar novamente.');
+        showEnhancementPopup('A IA externa recusou a imagem por tamanho. Reduza a escala (2x/3x) ou use uma versão menor antes de melhorar novamente.');
         return;
       }
       if(String(err?.message||'').includes('LOCAL_SIZE_LIMIT')){
-        toast('Este novo aumento ultrapassa o limite tecnico do navegador. Reduza a escala (2x/3x) ou reutilize a versao atual para exportar.');
+        showEnhancementPopup('Este novo aumento ultrapassa o limite técnico do navegador. Reduza a escala (2x/3x) ou reutilize a versão atual para exportar.');
         return;
       }
-      toast('Falha ao processar imagem neste tamanho. Tente reduzir a escala.');
+      showEnhancementPopup('Falha ao processar a imagem neste tamanho. Tente reduzir a escala.');
     } finally {
       if(progWrap) setTimeout(()=>{ progWrap.style.display='none'; },200);
       hideLoading();
