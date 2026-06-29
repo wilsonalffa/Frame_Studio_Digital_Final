@@ -78,6 +78,8 @@ let _enhApplyTimer=null;
 let _enhApplyToken=0;
 let _qiRenderQueued=false;
 const ENH_REMOTE_TIMEOUT_MS=45000;
+const ENH_LOCAL_MAX_SIDE=16384;
+const ENH_LOCAL_MAX_PIXELS=140000000;
 
 
 // ─────────────────────────────────────────────────────────
@@ -3038,6 +3040,13 @@ function updateScaleInfo(){
   document.getElementById('enhScaleInfo').textContent=`Saída: ${nw.toLocaleString()} × ${nh.toLocaleString()} px`;
 }
 
+function qiCanProcessLocally(w,h){
+  if(!Number.isFinite(w)||!Number.isFinite(h)||w<=0||h<=0) return false;
+  if(Math.max(w,h)>ENH_LOCAL_MAX_SIDE) return false;
+  if((w*h)>ENH_LOCAL_MAX_PIXELS) return false;
+  return true;
+}
+
 async function applyEnhancement(){
   if(!enhOrigCanvas) return;
   if(_enhApplyTimer){
@@ -3078,9 +3087,20 @@ async function applyEnhancement(){
           progLbl.textContent='Finalizando ajustes locais…';
           progBar.style.width='55%';
         } catch (err){
+          const msg=String(err?.message||'').toLowerCase();
+          const rejectedBySize=msg.includes('limite permitido')||msg.includes('413');
+          if(rejectedBySize){
+            throw new Error('REMOTE_SIZE_LIMIT');
+          }
           console.warn('Falha no upscaling remoto, usando fluxo local.', err);
           toast('IA externa indisponivel. Voltando para o modo local classico.');
         }
+      }
+
+      const projectedW=baseCanvas.width*upscaleScale;
+      const projectedH=baseCanvas.height*upscaleScale;
+      if(!qiCanProcessLocally(projectedW,projectedH)){
+        throw new Error('LOCAL_SIZE_LIMIT');
       }
 
       // Upscale bicúbico por passagens de 1.5×
@@ -3172,6 +3192,14 @@ async function applyEnhancement(){
       enhOrigCanvas._processed=out;
     } catch (err){
       console.error('Falha no melhorador de imagem:', err);
+      if(String(err?.message||'').includes('REMOTE_SIZE_LIMIT')){
+        toast('A IA externa recusou a imagem por tamanho. Para este arquivo, reduza a escala ou use uma versao menor antes de melhorar novamente.');
+        return;
+      }
+      if(String(err?.message||'').includes('LOCAL_SIZE_LIMIT')){
+        toast('Este novo aumento ultrapassa o limite tecnico do navegador. Reduza a escala (2x/3x) ou reutilize a versao atual para exportar.');
+        return;
+      }
       toast('Falha ao processar imagem neste tamanho. Tente reduzir a escala.');
     } finally {
       if(progWrap) setTimeout(()=>{ progWrap.style.display='none'; },200);
