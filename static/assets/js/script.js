@@ -77,6 +77,7 @@ let _qiPersistTimer=null;
 let _enhApplyTimer=null;
 let _enhApplyToken=0;
 let _qiRenderQueued=false;
+const ENH_REMOTE_TIMEOUT_MS=45000;
 
 
 // ─────────────────────────────────────────────────────────
@@ -486,6 +487,17 @@ function maxPrintCm(imgW,imgH){
   return imgW>=imgH ? [mxC,mnC] : [mnC,mxC];
 }
 
+function estimatePrintDpi(imgW,imgH,printCmW,printCmH){
+  return Math.max(1,Math.round(Math.min(imgW/(printCmW/2.54),imgH/(printCmH/2.54))));
+}
+
+function dpiBadgeMeta(dpi){
+  if(dpi>=220) return { tone:'alto', color:'#245A38', bg:'#EAF7EF' };
+  if(dpi>=180) return { tone:'bom', color:'#3A6E2A', bg:'#EFF6EB' };
+  if(dpi>=120) return { tone:'medio', color:'#8B6400', bg:'#FDF6E3' };
+  return { tone:'baixo', color:'#9B2020', bg:'#FDECEC' };
+}
+
 // ─────────────────────────────────────────────────────────
 //  ABA QUADROS
 // ─────────────────────────────────────────────────────────
@@ -516,8 +528,11 @@ function showQ(){
   tb.innerHTML='';
   sizes.forEach(([sw,sh])=>{
     const q=qualityLevel(w,h,sw,sh);
+    const dpi=estimatePrintDpi(w,h,sw,sh);
+    const dpiMeta=dpiBadgeMeta(dpi);
     tb.innerHTML+=`<tr>
       <td style="font-weight:600">${sw} × ${sh} cm</td>
+      <td><span style="display:inline-block;padding:3px 10px;border-radius:20px;background:${dpiMeta.bg};color:${dpiMeta.color};font-size:11px;font-weight:700;white-space:nowrap">${dpi} DPI</span></td>
       <td>${qualityBar(q.level)}</td>
       <td><span style="background:${q.bg};color:${q.color};padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap">${q.label}</span></td>
     </tr>`;
@@ -614,43 +629,76 @@ function qiUpdateSmartAlert(){
 
   const avgScale=(qiImageScaleX+qiImageScaleY)/2;
   let tone='ok';
-  let title='Boa configuração para impressão';
+  let title='PODE SALVAR';
+  let nextStep='O arquivo já está numa faixa segura para exportar sem IA.';
   let detail=`DPI efetivo ${spec.effectiveDpi}. Enquadramento pronto para exportação.`;
   let actionLabel='';
   qiSmartSuggestion=null;
+  const aiRecommendation=qiGetAiRecommendationForSpec(spec);
 
   if(spec.effectiveDpi<150){
     tone='danger';
-    title='Risco alto de perda de nitidez';
+    title='USE IA';
+    nextStep='A imagem está baixa para impressão. Use IA ou reduza o tamanho final.';
     detail=`DPI efetivo ${spec.effectiveDpi}. Reduza o tamanho final em cm ou use imagem com maior resolução.`;
-    actionLabel='Aplicar tamanho recomendado';
+    actionLabel='Ajustar tamanho';
     qiSmartSuggestion={ type:'resizeToDpi', targetDpi:220 };
   } else if(spec.scaled||spec.effectiveDpi<220){
     tone='warn';
-    title='Atenção para qualidade final';
+    title='RECOMENDO TESTAR';
+    nextStep='O fluxo local ainda pode funcionar, mas vale conferir uma prova antes de fechar.';
     detail=`DPI efetivo ${spec.effectiveDpi}${spec.scaled?' (limitado por 10.000 px).':''} Pode perder definição em visualização próxima.`;
-    actionLabel='Ajustar para 220 DPI';
+    actionLabel='Tentar 220 DPI';
     qiSmartSuggestion={ type:'resizeToDpi', targetDpi:220 };
   } else if(avgScale>2.2){
     tone='warn';
-    title='Zoom alto aplicado';
+    title='RECOMENDO TESTAR';
+    nextStep='Reduza o zoom para comparar o detalhe real da imagem.';
     detail='Escala da imagem acima de 220%. Verifique se não há perda de detalhe nas áreas importantes.';
     actionLabel='Voltar zoom para 100%';
     qiSmartSuggestion={ type:'resetZoom' };
   } else if(qiFitMode==='contain'){
     tone='info';
-    title='Modo Encaixar ativo';
+    title='PODE SALVAR';
+    nextStep='Use Preencher se quiser ocupar toda a área da impressão.';
     detail='Pode gerar margens visíveis no enquadramento. Use Preencher se quiser ocupar toda a área.';
     actionLabel='Trocar para Preencher';
     qiSmartSuggestion={ type:'setFitCover' };
   }
 
+  if(aiRecommendation){
+    detail += ` Sugestão de fluxo: ${aiRecommendation.name} — ${aiRecommendation.detail}`;
+  }
+
+  detail += qiGetUsageGuidanceForSpec(spec, aiRecommendation);
+
   alertEl.className=`qi-smart-alert ${tone}`;
   if(qiSmartSuggestion&&actionLabel){
-    alertEl.innerHTML=`<strong>${title}</strong><span>${detail}</span><button class="qi-smart-action" type="button" onclick="qiApplySmartSuggestion()">${actionLabel}</button>`;
+    alertEl.innerHTML=`<div class="qi-smart-badge">${title}</div><strong>Próximo passo</strong><span class="qi-smart-next">${nextStep}</span><span>${detail}</span><button class="qi-smart-action" type="button" onclick="qiApplySmartSuggestion()">${actionLabel}</button>`;
     return;
   }
-  alertEl.innerHTML=`<strong>${title}</strong><span>${detail}</span>`;
+  alertEl.innerHTML=`<div class="qi-smart-badge">${title}</div><strong>Próximo passo</strong><span class="qi-smart-next">${nextStep}</span><span>${detail}</span>`;
+}
+
+function qiGetUsageGuidanceForSpec(spec, aiRecommendation){
+  if(!spec) return '';
+
+  if(spec.effectiveDpi>=220){
+    return ' Regra prática: LOCAL suficiente. Pode salvar assim; use IA só se o teste impresso ainda mostrar perda de detalhe.';
+  }
+
+  if(spec.effectiveDpi>=180){
+    const flow=aiRecommendation?.name==='Replicate'
+      ? 'IA recomendada se a arte tiver detalhes finos.'
+      : 'LOCAL ainda pode ser suficiente se a arte estiver boa visualmente.';
+    return ` Regra prática: FAIXA INTERMEDIÁRIA. ${flow}`;
+  }
+
+  if(aiRecommendation?.name==='Replicate'){
+    return ' Regra prática: IA fortemente recomendada. A definição está baixa para impressão; faça o primeiro ajuste local e, se ainda ficar limitado, use a IA externa.';
+  }
+
+  return ' Regra prática: ajuste o tamanho ou use uma imagem de origem maior antes de exportar.';
 }
 
 function qiApplySmartSuggestion(){
@@ -834,6 +882,88 @@ function qiUpdateExportPresetInfo(){
     return;
   }
   el.textContent=`Saida: ${area} · ${px} · ${spec.dpi} DPI.`;
+}
+
+function qiGetAiRecommendationForSpec(spec){
+  if(!spec) return null;
+
+  const outputMp=(spec.outW*spec.outH)/1e6;
+  const longSideCm=Math.max(spec.wCm,spec.hCm);
+
+  if(outputMp>=35 || longSideCm>=80 || spec.effectiveDpi<180 || spec.scaled){
+    return {
+      name:'Replicate',
+      detail:'bom equilíbrio entre custo e qualidade para imagens grandes; é o caminho remoto mais barato que já deixei pronto.'
+    };
+  }
+
+  return {
+    name:'Gemini',
+    detail:'suficiente para imagens pequenas e médias, com o menor custo operacional.'
+  };
+}
+
+async function qiCanvasToBlob(canvas, mimeType='image/jpeg', quality=0.95){
+  return new Promise((resolve, reject)=>{
+    if(!canvas?.toBlob) {
+      reject(new Error('Canvas sem suporte a toBlob.'));
+      return;
+    }
+    canvas.toBlob((blob)=>{
+      if(!blob) reject(new Error('Falha ao gerar blob da imagem.'));
+      else resolve(blob);
+    }, mimeType, quality);
+  });
+}
+
+async function qiBlobToCanvas(blob){
+  const url=URL.createObjectURL(blob);
+  try{
+    const img=new Image();
+    const loaded=await new Promise((resolve,reject)=>{
+      img.onload=()=>resolve(true);
+      img.onerror=()=>reject(new Error('Falha ao carregar imagem retornada pela IA.'));
+      img.src=url;
+    });
+    if(!loaded) return null;
+    const canvas=document.createElement('canvas');
+    canvas.width=img.naturalWidth||img.width;
+    canvas.height=img.naturalHeight||img.height;
+    canvas.getContext('2d').drawImage(img,0,0);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function qiEnhanceWithReplicate(sourceCanvas, scale){
+  const blob=await qiCanvasToBlob(sourceCanvas, 'image/jpeg', 0.95);
+  const form=new FormData();
+  form.append('file', blob, 'fastframe-enhance.jpg');
+  form.append('scale', String(scale>=3?4:2));
+
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(), ENH_REMOTE_TIMEOUT_MS);
+  let resp;
+  try{
+    resp=await fetch('/api/enhance-image', { method:'POST', body: form, signal: controller.signal });
+  } catch (err){
+    if(err?.name==='AbortError') throw new Error('Tempo limite excedido na IA externa.');
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  if(!resp.ok){
+    let errMsg='Falha ao melhorar com IA.';
+    try{
+      const err=await resp.json();
+      errMsg=err.error || err.detail || errMsg;
+    } catch {}
+    throw new Error(errMsg);
+  }
+
+  const outBlob=await resp.blob();
+  return qiBlobToCanvas(outBlob);
 }
 
 function qiBuildExportCanvas(){
@@ -2900,7 +3030,7 @@ function updateScaleInfo(){
   document.getElementById('enhScaleInfo').textContent=`Saída: ${nw.toLocaleString()} × ${nh.toLocaleString()} px`;
 }
 
-function applyEnhancement(){
+async function applyEnhancement(){
   if(!enhOrigCanvas) return;
   if(_enhApplyTimer){
     clearTimeout(_enhApplyTimer);
@@ -2908,7 +3038,7 @@ function applyEnhancement(){
   }
   const token=++_enhApplyToken;
 
-  _enhApplyTimer=setTimeout(()=>{
+  _enhApplyTimer=setTimeout(async()=>{
     if(token!==_enhApplyToken) return;
     _enhApplyTimer=null;
 
@@ -2922,97 +3052,123 @@ function applyEnhancement(){
     const progWrap=document.getElementById('enhProgress');
     const progBar =document.getElementById('enhProgressBar');
     const progLbl =document.getElementById('enhProgressLabel');
-    if(enhScale>1){ progWrap.style.display='block'; progLbl.textContent='Aumentando resolução…'; progBar.style.width='20%'; }
+    try{
+      if(progWrap){ progWrap.style.display='block'; progLbl.textContent=enhScale>1?'Aumentando resolução…':'Aplicando ajustes…'; progBar.style.width='20%'; }
 
-    // Upscale bicúbico por passagens de 1.5×
-    let cur=enhOrigCanvas;
-    let cw=cur.width, ch=cur.height;
-    const tw=cw*enhScale, th=ch*enhScale;
-    while(cw<tw){
-      const sw=Math.min(Math.round(cw*1.5),tw);
-      const sh=Math.min(Math.round(ch*1.5),th);
-      const tmp=document.createElement('canvas'); tmp.width=sw; tmp.height=sh;
-      const tc=tmp.getContext('2d');
-      tc.imageSmoothingEnabled=true; tc.imageSmoothingQuality='high';
-      tc.drawImage(cur,0,0,sw,sh);
-      cur=tmp; cw=sw; ch=sh;
-    }
-    if(progBar) progBar.style.width='60%';
-
-    const out=document.createElement('canvas'); out.width=cur.width; out.height=cur.height;
-    const ctx=out.getContext('2d'); ctx.drawImage(cur,0,0);
-
-    // Temperatura via overlay
-    if(temp!==0){
-      ctx.save(); ctx.globalAlpha=Math.abs(temp)/200;
-      ctx.fillStyle=temp>0?'#FF9900':'#0099FF';
-      ctx.fillRect(0,0,out.width,out.height); ctx.restore();
-    }
-
-    // Brilho + contraste + saturação via ImageData
-    const imgData=ctx.getImageData(0,0,out.width,out.height);
-    const d=imgData.data;
-    const cf=(contrast/100+1)**2;
-    const bf=bright/100*255;
-    for(let i=0;i<d.length;i+=4){
-      let r=d[i], g=d[i+1], b2=d[i+2];
-      r+=bf; g+=bf; b2+=bf;
-      r=(r-128)*cf+128; g=(g-128)*cf+128; b2=(b2-128)*cf+128;
-      if(sat!==0){
-        const gray=.299*r+.587*g+.114*b2;
-        const sf=sat/100+1;
-        r=gray+(r-gray)*sf; g=gray+(g-gray)*sf; b2=gray+(b2-gray)*sf;
-      }
-      d[i]=Math.max(0,Math.min(255,r));
-      d[i+1]=Math.max(0,Math.min(255,g));
-      d[i+2]=Math.max(0,Math.min(255,b2));
-    }
-    ctx.putImageData(imgData,0,0);
-
-    // Filtros de estilo (B&W, Sépia, Vívido)
-    if(enhFilter!=='none'){
-      const fImgData=ctx.getImageData(0,0,out.width,out.height);
-      const fPx=fImgData.data;
-      for(let fi=0;fi<fPx.length;fi+=4){
-        const fGray=Math.round(.299*fPx[fi]+.587*fPx[fi+1]+.114*fPx[fi+2]);
-        if(enhFilter==='bw'){
-          fPx[fi]=fGray; fPx[fi+1]=fGray; fPx[fi+2]=fGray;
-        } else if(enhFilter==='sepia'){
-          fPx[fi]  =Math.min(255,Math.round(fGray*.393+fGray*.769+fGray*.189));
-          fPx[fi+1]=Math.min(255,Math.round(fGray*.349+fGray*.686+fGray*.168));
-          fPx[fi+2]=Math.min(255,Math.round(fGray*.272+fGray*.534+fGray*.131));
-        } else if(enhFilter==='vivid'){
-          const vf=(1.2)**2;
-          let vr=(fPx[fi]-128)*vf+128;
-          let vg=(fPx[fi+1]-128)*vf+128;
-          let vb=(fPx[fi+2]-128)*vf+128;
-          const vGray=.299*vr+.587*vg+.114*vb;
-          const vs=1.6;
-          fPx[fi]  =Math.max(0,Math.min(255,vGray+(vr-vGray)*vs));
-          fPx[fi+1]=Math.max(0,Math.min(255,vGray+(vg-vGray)*vs));
-          fPx[fi+2]=Math.max(0,Math.min(255,vGray+(vb-vGray)*vs));
+      let baseCanvas=enhOrigCanvas;
+      let upscaleScale=enhScale;
+      const aiRecommendation=qiGetAiRecommendationForSpec(qiGetExportSpec());
+      const canUseRemoteAi=Boolean(aiRecommendation&&aiRecommendation.name==='Replicate'&&enhScale>1);
+      if(canUseRemoteAi){
+        try{
+          progLbl.textContent='Melhorando com IA externa…';
+          progBar.style.width='35%';
+          const remoteCanvas=await qiEnhanceWithReplicate(enhOrigCanvas, enhScale);
+          if(token!==_enhApplyToken) return;
+          if(remoteCanvas) baseCanvas=remoteCanvas;
+          upscaleScale=1;
+          progLbl.textContent='Finalizando ajustes locais…';
+          progBar.style.width='55%';
+        } catch (err){
+          console.warn('Falha no upscaling remoto, usando fluxo local.', err);
+          toast('IA externa indisponivel. Voltando para o modo local classico.');
         }
       }
-      ctx.putImageData(fImgData,0,0);
+
+      // Upscale bicúbico por passagens de 1.5×
+      let cur=baseCanvas;
+      let cw=cur.width, ch=cur.height;
+      const tw=cw*upscaleScale, th=ch*upscaleScale;
+      while(cw<tw){
+        const sw=Math.min(Math.round(cw*1.5),tw);
+        const sh=Math.min(Math.round(ch*1.5),th);
+        const tmp=document.createElement('canvas'); tmp.width=sw; tmp.height=sh;
+        const tc=tmp.getContext('2d');
+        tc.imageSmoothingEnabled=true; tc.imageSmoothingQuality='high';
+        tc.drawImage(cur,0,0,sw,sh);
+        cur=tmp; cw=sw; ch=sh;
+      }
+      if(progBar) progBar.style.width='60%';
+
+      const out=document.createElement('canvas'); out.width=cur.width; out.height=cur.height;
+      const ctx=out.getContext('2d'); ctx.drawImage(cur,0,0);
+
+      // Temperatura via overlay
+      if(temp!==0){
+        ctx.save(); ctx.globalAlpha=Math.abs(temp)/200;
+        ctx.fillStyle=temp>0?'#FF9900':'#0099FF';
+        ctx.fillRect(0,0,out.width,out.height); ctx.restore();
+      }
+
+      // Brilho + contraste + saturação via ImageData
+      const imgData=ctx.getImageData(0,0,out.width,out.height);
+      const d=imgData.data;
+      const cf=(contrast/100+1)**2;
+      const bf=bright/100*255;
+      for(let i=0;i<d.length;i+=4){
+        let r=d[i], g=d[i+1], b2=d[i+2];
+        r+=bf; g+=bf; b2+=bf;
+        r=(r-128)*cf+128; g=(g-128)*cf+128; b2=(b2-128)*cf+128;
+        if(sat!==0){
+          const gray=.299*r+.587*g+.114*b2;
+          const sf=sat/100+1;
+          r=gray+(r-gray)*sf; g=gray+(g-gray)*sf; b2=gray+(b2-gray)*sf;
+        }
+        d[i]=Math.max(0,Math.min(255,r));
+        d[i+1]=Math.max(0,Math.min(255,g));
+        d[i+2]=Math.max(0,Math.min(255,b2));
+      }
+      ctx.putImageData(imgData,0,0);
+
+      // Filtros de estilo (B&W, Sépia, Vívido)
+      if(enhFilter!=='none'){
+        const fImgData=ctx.getImageData(0,0,out.width,out.height);
+        const fPx=fImgData.data;
+        for(let fi=0;fi<fPx.length;fi+=4){
+          const fGray=Math.round(.299*fPx[fi]+.587*fPx[fi+1]+.114*fPx[fi+2]);
+          if(enhFilter==='bw'){
+            fPx[fi]=fGray; fPx[fi+1]=fGray; fPx[fi+2]=fGray;
+          } else if(enhFilter==='sepia'){
+            fPx[fi]  =Math.min(255,Math.round(fGray*.393+fGray*.769+fGray*.189));
+            fPx[fi+1]=Math.min(255,Math.round(fGray*.349+fGray*.686+fGray*.168));
+            fPx[fi+2]=Math.min(255,Math.round(fGray*.272+fGray*.534+fGray*.131));
+          } else if(enhFilter==='vivid'){
+            const vf=(1.2)**2;
+            let vr=(fPx[fi]-128)*vf+128;
+            let vg=(fPx[fi+1]-128)*vf+128;
+            let vb=(fPx[fi+2]-128)*vf+128;
+            const vGray=.299*vr+.587*vg+.114*vb;
+            const vs=1.6;
+            fPx[fi]  =Math.max(0,Math.min(255,vGray+(vr-vGray)*vs));
+            fPx[fi+1]=Math.max(0,Math.min(255,vGray+(vg-vGray)*vs));
+            fPx[fi+2]=Math.max(0,Math.min(255,vGray+(vb-vGray)*vs));
+          }
+        }
+        ctx.putImageData(fImgData,0,0);
+      }
+
+      for(let ni=0;ni<noise;ni++) applyBoxBlur(ctx,out.width,out.height);
+      for(let si=0;si<sharp;si++) applyUnsharp(ctx,out.width,out.height);
+
+      if(progBar) progBar.style.width='100%';
+
+      const afterCvs=document.getElementById('enhAfter');
+      const maxD=400;
+      let aw=out.width, ah=out.height;
+      if(aw>maxD){ ah=Math.round(ah*maxD/aw); aw=maxD; }
+      if(ah>maxD){ aw=Math.round(aw*maxD/ah); ah=maxD; }
+      afterCvs.width=aw; afterCvs.height=ah;
+      afterCvs.getContext('2d').drawImage(out,0,0,aw,ah);
+      document.getElementById('enhAfterInfo').textContent=`${out.width.toLocaleString()} × ${out.height.toLocaleString()} px`;
+
+      enhOrigCanvas._processed=out;
+    } catch (err){
+      console.error('Falha no melhorador de imagem:', err);
+      toast('Falha ao processar imagem neste tamanho. Tente reduzir a escala.');
+    } finally {
+      if(progWrap) setTimeout(()=>{ progWrap.style.display='none'; },200);
+      hideLoading();
     }
-
-    for(let ni=0;ni<noise;ni++) applyBoxBlur(ctx,out.width,out.height);
-    for(let si=0;si<sharp;si++) applyUnsharp(ctx,out.width,out.height);
-
-    if(progBar) progBar.style.width='100%';
-    setTimeout(()=>{ if(progWrap) progWrap.style.display='none'; },400);
-    hideLoading();
-
-    const afterCvs=document.getElementById('enhAfter');
-    const maxD=400;
-    let aw=out.width, ah=out.height;
-    if(aw>maxD){ ah=Math.round(ah*maxD/aw); aw=maxD; }
-    if(ah>maxD){ aw=Math.round(aw*maxD/ah); ah=maxD; }
-    afterCvs.width=aw; afterCvs.height=ah;
-    afterCvs.getContext('2d').drawImage(out,0,0,aw,ah);
-    document.getElementById('enhAfterInfo').textContent=`${out.width.toLocaleString()} × ${out.height.toLocaleString()} px`;
-
-    enhOrigCanvas._processed=out;
   },90);
 }
 

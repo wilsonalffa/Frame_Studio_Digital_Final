@@ -207,7 +207,9 @@ nav:hover::-webkit-scrollbar-thumb{background:var(--gold)}
 .qi-actions .dl-btn.pri{grid-column:1/-1;order:-1;padding:12px 10px;font-size:11px;letter-spacing:1.2px}
 .qi-helper-copy{font-size:11px;color:var(--gray2);margin-top:6px;line-height:1.7}
 .qi-smart-alert{display:flex;flex-direction:column;gap:6px;border-radius:10px;padding:11px 12px;border:1px solid #D9E4F2;background:#F4F8FE;color:#23456E}
+.qi-smart-badge{display:inline-flex;align-self:flex-start;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.58);font-size:9px;font-weight:700;letter-spacing:1.3px;text-transform:uppercase}
 .qi-smart-alert strong{font-size:11px;letter-spacing:.02em}
+.qi-smart-next{font-size:11px;font-weight:700;line-height:1.45}
 .qi-smart-alert span{font-size:11px;line-height:1.5;color:inherit}
 .qi-smart-action{align-self:flex-start;margin-top:2px;border:1px solid currentColor;background:rgba(255,255,255,.58);color:inherit;border-radius:8px;padding:6px 9px;font-family:'Raleway',sans-serif;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;transition:all .2s ease}
 .qi-smart-action:hover{background:rgba(255,255,255,.92);transform:translateY(-1px)}
@@ -268,7 +270,7 @@ nav:hover::-webkit-scrollbar-thumb{background:var(--gold)}
   .qi-actions{grid-template-columns:1fr}
   .qi-actions .dl-btn.pri{grid-column:auto}
   .qi-live-status{font-size:10px}
-  .qi-smart-alert strong,.qi-smart-alert span{font-size:10px}
+  .qi-smart-alert strong,.qi-smart-alert span,.qi-smart-next{font-size:10px}
   .sq-designer-head{flex-direction:column}
   .sq-size-studio{grid-template-columns:1fr;gap:10px}
   .sq-lock-btn{width:100%;height:46px}
