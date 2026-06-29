@@ -468,6 +468,10 @@ function loadPDF(file,type){
 // ─────────────────────────────────────────────────────────
 function qualityLevel(imgW,imgH,printCmW,printCmH){
   const dpi=Math.round(Math.min(imgW/(printCmW/2.54),imgH/(printCmH/2.54)));
+  return qualityLevelByDpi(dpi);
+}
+
+function qualityLevelByDpi(dpi){
   if(dpi>=250) return{level:5,label:'⭐ Perfeita',         color:'#2E7D52',bg:'#EBF7F0',icon:'✅'};
   if(dpi>=180) return{level:4,label:'👍 Muito boa',        color:'#3A6E2A',bg:'#EFF6EB',icon:'✅'};
   if(dpi>=120) return{level:3,label:'👌 Boa',              color:'#8B6400',bg:'#FDF6E3',icon:'⚠️'};
@@ -491,6 +495,38 @@ function maxPrintCm(imgW,imgH){
 
 function estimatePrintDpi(imgW,imgH,printCmW,printCmH){
   return Math.max(1,Math.round(Math.min(imgW/(printCmW/2.54),imgH/(printCmH/2.54))));
+}
+
+function estimateEffectiveExportDpiForSize(printCmW,printCmH){
+  const targetDpi=300;
+  const maxPx=10000;
+  const targetW=Math.max(1,Math.round((printCmW/2.54)*targetDpi));
+  const targetH=Math.max(1,Math.round((printCmH/2.54)*targetDpi));
+
+  let outW=targetW;
+  let outH=targetH;
+  let scaled=false;
+  const maxSide=Math.max(outW,outH);
+  if(maxSide>maxPx){
+    const ratio=maxPx/maxSide;
+    outW=Math.max(1,Math.round(outW*ratio));
+    outH=Math.max(1,Math.round(outH*ratio));
+    scaled=true;
+  }
+
+  const exportDpi=Math.max(1,Math.round(Math.min((outW*2.54)/printCmW,(outH*2.54)/printCmH)));
+  const srcW=qImg?.img?.naturalWidth||qImg?.img?.width||0;
+  const srcH=qImg?.img?.naturalHeight||qImg?.img?.height||0;
+  const sourceDpi=(srcW>0&&srcH>0)
+    ? Math.max(1,Math.round(Math.min((srcW*2.54)/printCmW,(srcH*2.54)/printCmH)))
+    : exportDpi;
+
+  return {
+    dpi:Math.min(exportDpi,sourceDpi),
+    exportDpi,
+    sourceDpi,
+    scaled,
+  };
 }
 
 function dpiBadgeMeta(dpi){
@@ -529,12 +565,16 @@ function showQ(){
   const tb=document.getElementById('sugTb');
   tb.innerHTML='';
   sizes.forEach(([sw,sh])=>{
-    const q=qualityLevel(w,h,sw,sh);
-    const dpi=estimatePrintDpi(w,h,sw,sh);
+    const eff=estimateEffectiveExportDpiForSize(sw,sh);
+    const dpi=eff.dpi;
+    const q=qualityLevelByDpi(dpi);
     const dpiMeta=dpiBadgeMeta(dpi);
+    const dpiTitle=eff.scaled
+      ? `DPI base ${eff.sourceDpi} | DPI exportacao ${eff.exportDpi} (limite de 10.000 px)`
+      : `DPI base ${eff.sourceDpi}`;
     tb.innerHTML+=`<tr>
       <td style="font-weight:600">${sw} × ${sh} cm</td>
-      <td><span style="display:inline-block;padding:3px 10px;border-radius:20px;background:${dpiMeta.bg};color:${dpiMeta.color};font-size:11px;font-weight:700;white-space:nowrap">${dpi} DPI</span></td>
+      <td><span title="${dpiTitle}" style="display:inline-block;padding:3px 10px;border-radius:20px;background:${dpiMeta.bg};color:${dpiMeta.color};font-size:11px;font-weight:700;white-space:nowrap">${dpi} DPI</span></td>
       <td>${qualityBar(q.level)}</td>
       <td><span style="background:${q.bg};color:${q.color};padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap">${q.label}</span></td>
     </tr>`;
@@ -891,12 +931,26 @@ function qiGetAiRecommendationForSpec(spec){
 
   const outputMp=(spec.outW*spec.outH)/1e6;
   const longSideCm=Math.max(spec.wCm,spec.hCm);
+  const srcW=qImg?.img?.naturalWidth||qImg?.img?.width||0;
+  const srcH=qImg?.img?.naturalHeight||qImg?.img?.height||0;
+  const sourceDpi=(srcW>0&&srcH>0)
+    ? Math.max(1,Math.round(Math.min((srcW*2.54)/spec.wCm,(srcH*2.54)/spec.hCm)))
+    : spec.effectiveDpi;
 
   // Se o DPI efetivo já está confortável para impressão, evitar recomendar IA novamente.
   if(spec.effectiveDpi>=200){
     return {
       name:'Local',
       detail:'DPI já está em faixa segura para impressão. Use IA apenas se o teste impresso ainda mostrar perda de detalhe.'
+    };
+  }
+
+  // Se a imagem base já possui DPI alto, mas caiu no limite técnico de exportação,
+  // IA não resolve o gargalo principal deste fluxo de exportação.
+  if(spec.scaled&&sourceDpi>=220){
+    return {
+      name:'Local',
+      detail:`a imagem base já está alta (${sourceDpi} DPI). O limite atual é técnico de exportação (10.000 px), não falta de resolução da arte.`
     };
   }
 
