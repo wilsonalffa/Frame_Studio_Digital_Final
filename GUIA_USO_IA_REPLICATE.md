@@ -1,6 +1,6 @@
 # Guia de Uso da IA no Melhorador
 
-Este documento resume a regra prática para decidir quando usar apenas o melhorador local e quando vale acionar a IA externa via Replicate.
+Este documento resume a regra prática para decidir quando usar apenas o melhorador local e quando vale acionar a IA externa via Upscaler.
 
 ## Fluxo recomendado
 
@@ -23,7 +23,7 @@ Este documento resume a regra prática para decidir quando usar apenas o melhora
 - Artes com poucos detalhes finos.
 - Trabalhos em que o cliente não fará visualização muito próxima.
 
-## Quando vale usar Replicate
+## Quando vale usar Upscaler
 
 - Impressões grandes com DPI final baixo.
 - Imagens originais pequenas demais para o tamanho final desejado.
@@ -35,22 +35,22 @@ Este documento resume a regra prática para decidir quando usar apenas o melhora
 1. Faça o primeiro 4x local.
 2. Verifique o DPI no tamanho final de impressão.
 3. Se já estiver bom, pare no local.
-4. Se ainda estiver no limite ou pixelado, faça um segundo upscale com Replicate.
+4. Se ainda estiver no limite ou pixelado, faça um segundo upscale com Upscaler.
 
 ## Exemplo para 120 x 80 cm
 
 - Se o arquivo final ficar acima de 220 DPI, normalmente a impressão já estará segura.
 - Se ficar entre 180 e 220 DPI, avalie a arte com mais cuidado.
-- Se ficar abaixo de 180 DPI, o uso do Replicate tende a valer a pena.
+- Se ficar abaixo de 180 DPI, o uso do Upscaler tende a valer a pena.
 
 ## Custo
 
 - O processamento local nao consome credito externo.
-- O Replicate so consome saldo quando realmente for acionado.
-- O consumo sai primeiro do saldo disponivel na conta do Replicate.
+- O Upscaler so consome saldo quando realmente for acionado.
+- O consumo sai primeiro do saldo disponivel na conta do provedor externo.
 
 ## Resumo curto
 
 - Primeiro tente local.
 - Olhe o DPI final.
-- Use Replicate apenas quando a imagem ainda nao estiver segura para imprimir.
+- Use Upscaler apenas quando a imagem ainda nao estiver segura para imprimir.

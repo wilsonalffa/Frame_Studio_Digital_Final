@@ -733,13 +733,13 @@ function qiGetUsageGuidanceForSpec(spec, aiRecommendation){
   }
 
   if(spec.effectiveDpi>=180){
-    const flow=aiRecommendation?.name==='Replicate'
+    const flow=aiRecommendation?.name==='Upscaler'
       ? 'IA recomendada se a arte tiver detalhes finos.'
       : 'LOCAL ainda pode ser suficiente se a arte estiver boa visualmente.';
     return ` Regra prática: FAIXA INTERMEDIÁRIA. ${flow}`;
   }
 
-  if(aiRecommendation?.name==='Replicate'){
+  if(aiRecommendation?.name==='Upscaler'){
     return ' Regra prática: IA fortemente recomendada. A definição está baixa para impressão; faça o primeiro ajuste local e, se ainda ficar limitado, use a IA externa.';
   }
 
@@ -959,7 +959,7 @@ function qiGetAiRecommendationForSpec(spec){
 
   if(outputMp>=35 || longSideCm>=80 || spec.effectiveDpi<180 || spec.scaled){
     return {
-      name:'Replicate',
+      name:'Upscaler',
       detail:'bom equilíbrio entre custo e qualidade para imagens grandes; é o caminho remoto mais barato que já deixei pronto.'
     };
   }
@@ -3188,7 +3188,7 @@ async function applyEnhancement(){
       let baseCanvas=enhOrigCanvas;
       let upscaleScale=enhScale;
       const aiRecommendation=qiGetAiRecommendationForSpec(qiGetExportSpec());
-      const canUseRemoteAi=Boolean(enhRemoteEnabled&&aiRecommendation&&aiRecommendation.name==='Replicate'&&enhScale>1);
+      const canUseRemoteAi=Boolean(enhRemoteEnabled&&aiRecommendation&&aiRecommendation.name==='Upscaler'&&enhScale>1);
       if(canUseRemoteAi){
         try{
           progLbl.textContent='Melhorando com IA externa…';

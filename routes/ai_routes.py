@@ -232,13 +232,13 @@ def enhance_image():
 
         if prediction.get('status') != 'succeeded':
             return jsonify({
-                'error': 'Falha ao melhorar a imagem com Replicate.',
+                'error': 'Falha ao melhorar a imagem com Upscaler.',
                 'detail': prediction.get('error') or prediction.get('status') or 'status desconhecido',
             }), 502
 
         output_url = _extract_prediction_output_url(prediction)
         if not output_url:
-            return jsonify({'error': 'Replicate nao retornou uma imagem de saida.'}), 502
+            return jsonify({'error': 'Upscaler nao retornou uma imagem de saida.'}), 502
 
         output_req = urllib.request.Request(
             output_url,
@@ -256,6 +256,6 @@ def enhance_image():
 
     except urllib.error.HTTPError as e:
         err_body = e.read().decode('utf-8')
-        return jsonify({'error': f'Erro Replicate: {e.code}', 'detail': err_body}), e.code
+        return jsonify({'error': f'Erro Upscaler: {e.code}', 'detail': err_body}), e.code
     except Exception as e:
         return jsonify({'error': str(e)}), 500
