@@ -48,6 +48,8 @@ let gridCols=2, gridRows=2;
 let partWidths=[1], partHeights=[1];
 let totalWcm=null, totalHcm=null;
 let enhOrigCanvas=null, enhScale=1, enhFilter='none';
+let enhRemoteEnabled=false;
+let _enhRemotePrefLoaded=false;
 const QI_PRESETS=[
   { key:'10x15', w:10, h:15 },
   { key:'13x18', w:13, h:18 },
@@ -80,6 +82,7 @@ let _qiRenderQueued=false;
 const ENH_REMOTE_TIMEOUT_MS=45000;
 const ENH_LOCAL_MAX_SIDE=16384;
 const ENH_LOCAL_MAX_PIXELS=140000000;
+const ENH_REMOTE_PREF_KEY='ff_enh_remote_enabled';
 
 
 // ─────────────────────────────────────────────────────────
@@ -3048,6 +3051,7 @@ function loadEnv(e){
 // ─────────────────────────────────────────────────────────
 function initEnhFromQImg(){
   if(!qImg) return;
+  ensureEnhRemotePreference();
   enhScale=1;
   const img=qImg.img;
   const beforeCvs=document.getElementById('enhBefore');
@@ -3068,6 +3072,38 @@ function initEnhFromQImg(){
   afterCvs.width=1; afterCvs.height=1;
   document.getElementById('enhAfterInfo').textContent='';
   resetEnhSliders();
+  updateEnhRemoteInfo();
+  updateScaleInfo();
+}
+
+function ensureEnhRemotePreference(){
+  if(_enhRemotePrefLoaded) return;
+  _enhRemotePrefLoaded=true;
+  try{
+    enhRemoteEnabled=localStorage.getItem(ENH_REMOTE_PREF_KEY)==='1';
+  } catch {
+    enhRemoteEnabled=false;
+  }
+  updateEnhRemoteInfo();
+}
+
+function updateEnhRemoteInfo(){
+  const cb=document.getElementById('enhUseRemote');
+  const info=document.getElementById('enhRemoteInfo');
+  if(cb) cb.checked=Boolean(enhRemoteEnabled);
+  if(info){
+    info.textContent=enhRemoteEnabled
+      ? 'IA externa ativada. O uso de crédito só ocorre quando ela for realmente acionada.'
+      : 'IA externa desativada. Todo processamento ficará local, sem consumo de crédito.';
+  }
+}
+
+function setEnhRemoteEnabled(enabled){
+  enhRemoteEnabled=Boolean(enabled);
+  try{
+    localStorage.setItem(ENH_REMOTE_PREF_KEY, enhRemoteEnabled?'1':'0');
+  } catch {}
+  updateEnhRemoteInfo();
   updateScaleInfo();
 }
 
@@ -3091,7 +3127,8 @@ function setScale(s,btn){
 function updateScaleInfo(){
   if(!enhOrigCanvas) return;
   const nw=enhOrigCanvas.width*enhScale, nh=enhOrigCanvas.height*enhScale;
-  document.getElementById('enhScaleInfo').textContent=`Saída: ${nw.toLocaleString()} × ${nh.toLocaleString()} px`;
+  const mode=enhRemoteEnabled?'IA externa liberada':'modo local';
+  document.getElementById('enhScaleInfo').textContent=`Saída: ${nw.toLocaleString()} × ${nh.toLocaleString()} px · ${mode}`;
 }
 
 function qiCanProcessLocally(w,h){
@@ -3129,7 +3166,7 @@ async function applyEnhancement(){
       let baseCanvas=enhOrigCanvas;
       let upscaleScale=enhScale;
       const aiRecommendation=qiGetAiRecommendationForSpec(qiGetExportSpec());
-      const canUseRemoteAi=Boolean(aiRecommendation&&aiRecommendation.name==='Replicate'&&enhScale>1);
+      const canUseRemoteAi=Boolean(enhRemoteEnabled&&aiRecommendation&&aiRecommendation.name==='Replicate'&&enhScale>1);
       if(canUseRemoteAi){
         try{
           progLbl.textContent='Melhorando com IA externa…';
