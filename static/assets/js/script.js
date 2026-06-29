@@ -890,6 +890,14 @@ function qiGetAiRecommendationForSpec(spec){
   const outputMp=(spec.outW*spec.outH)/1e6;
   const longSideCm=Math.max(spec.wCm,spec.hCm);
 
+  // Se o DPI efetivo já está confortável para impressão, evitar recomendar IA novamente.
+  if(spec.effectiveDpi>=200){
+    return {
+      name:'Local',
+      detail:'DPI já está em faixa segura para impressão. Use IA apenas se o teste impresso ainda mostrar perda de detalhe.'
+    };
+  }
+
   if(outputMp>=35 || longSideCm>=80 || spec.effectiveDpi<180 || spec.scaled){
     return {
       name:'Replicate',
@@ -898,7 +906,7 @@ function qiGetAiRecommendationForSpec(spec){
   }
 
   return {
-    name:'Gemini',
+    name:'Local',
     detail:'suficiente para imagens pequenas e médias, com o menor custo operacional.'
   };
 }
