@@ -260,6 +260,11 @@ def excluir_loja_definitivo(store_id):
         conn.execute('DELETE FROM clientes WHERE store_id = ?', (store_id,))
         conn.execute('DELETE FROM store_state WHERE store_id = ?', (store_id,))
         try:
+            conn.execute('DELETE FROM support_messages WHERE store_id = ?', (store_id,))
+            conn.execute('DELETE FROM support_tickets WHERE store_id = ?', (store_id,))
+        except Exception:
+            pass
+        try:
             conn.execute('DELETE FROM frames_cache WHERE store_id = ?', (store_id,))
         except Exception:
             pass

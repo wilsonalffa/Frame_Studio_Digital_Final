@@ -695,6 +695,10 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
       Catálogo</button>
     <button class="mobile-nav-item" data-mobilenav="clientes" onclick="switchTab('clientes',null);toggleMobileNav()">👥
       Clientes</button>
+    {% if false %}
+    <button class="mobile-nav-item" data-mobilenav="licenca" onclick="switchTab('licenca',null);toggleMobileNav()">💳
+      Licença</button>
+    {% endif %}
 
     <a href="{{ url_for('main.logout') }}"
       style="color:rgba(255,255,255,.5);font-size:13px;margin-top:32px;text-decoration:none;letter-spacing:1px">Sair da
@@ -711,13 +715,15 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
     <span></span>
     <span>
       {% if current_user %}
+      <button type="button" onclick="openAccountModal()"
+        style="background:none;border:none;color:rgba(255,255,255,.82);font-size:12px;font-weight:700;letter-spacing:.5px;cursor:pointer;padding:0;font-family:inherit">
+        {{ current_user.store_name or current_user.display_name or current_user.username }} &middot; {% if current_user.role == 'admin' %}Administrador{% else %}Unidade{% endif %}
+      </button>
+      &nbsp;&nbsp;·&nbsp;&nbsp;
       {% if current_user.role == 'admin' %}
       <button type="button" onclick="switchTab('admin',null);window.scrollTo({top:0,behavior:'smooth'})"
         style="background:none;border:none;color:var(--gold3);font-size:12px;font-weight:700;letter-spacing:.5px;cursor:pointer;padding:0;font-family:inherit">&#9998;
         Admin</button>
-      {% else %}
-      <span style="color:rgba(255,255,255,.8);letter-spacing:.5px">{{ current_user.store_name or
-        current_user.display_name or current_user.username }} &middot; Unidade</span>
       {% endif %}
       &nbsp;&nbsp;·&nbsp;&nbsp;
       <a href="{{ url_for('main.logout') }}" style="color:rgba(255,255,255,.55);letter-spacing:.5px">Sair</a>
@@ -741,6 +747,9 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
         <button class="nav-item" data-nav="montagem" onclick="switchTab('montagem',this)">Montagem</button>
         <button class="nav-item" data-nav="catalogo" onclick="switchTab('catalogo',this)">Catálogo</button>
         <button class="nav-item" data-nav="clientes" onclick="switchTab('clientes',this)">Clientes</button>
+        {% if false %}
+        <button class="nav-item" data-nav="licenca" onclick="switchTab('licenca',this)">Licença</button>
+        {% endif %}
       </nav>
       <div class="nav-scroll-controls" id="navScrollControls" aria-label="Controles das abas">
         <button class="nav-scroll-btn" id="navScrollLeft" type="button" onclick="scrollNavTabs(-1)"
@@ -841,6 +850,24 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
           </svg>
         </span>
         <span class="sidebar-label">Clientes</span>
+      </button>
+      {% if false %}
+      <button class="sidebar-btn" data-nav="licenca" onclick="switchTab('licenca',this)" title="Licenca mensal">
+        <span class="sidebar-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="3" y="6" width="18" height="12" rx="2"></rect>
+            <path d="M3 10h18"></path>
+            <circle cx="8" cy="14" r="1"></circle>
+          </svg>
+        </span>
+        <span class="sidebar-label">Licença</span>
+      </button>
+      {% endif %}
+
+      <button id="ssFab" class="sidebar-btn" onclick="selfServiceToggle()" aria-label="Abrir ajuda IA" title="Ajuda IA"
+        style="margin-top:auto;justify-content:center">
+        <span class="sidebar-icon" aria-hidden="true">✦</span>
+        <span class="sidebar-label">Ajuda</span>
       </button>
     </aside>
 
@@ -2337,8 +2364,177 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
             <div id="historicoList" style="display:flex;flex-direction:column;gap:10px"></div>
           </div>
 
+          {% if current_user and current_user.role != 'admin' %}
+          <div class="canvas-card" style="margin-top:18px">
+            <div
+              style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+              <div>
+                <div class="card-h">Suporte da Unidade</div>
+                <div style="font-size:12px;color:var(--gray);line-height:1.6">Abra e acompanhe chamados para suporte operacional da sua unidade.</div>
+              </div>
+              <button class="btn dark" style="padding:8px 14px;font-size:12px" onclick="supportCarregarChamados()">⟳ Atualizar</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:end">
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Assunto</label>
+                <input type="text" id="supportSubject" placeholder="Ex: Unidade não consegue acessar o sistema"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              </div>
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Categoria</label>
+                <select id="supportCategory"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  <option value="geral">Geral</option>
+                  <option value="acesso">Acesso</option>
+                  <option value="orcamento">Orçamento</option>
+                  <option value="simulador">Simulador</option>
+                  <option value="financeiro">Financeiro</option>
+                  <option value="integracao">Integração</option>
+                  <option value="outro">Outro</option>
+                </select>
+              </div>
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Canal</label>
+                <select id="supportChannel"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  <option value="painel">Painel</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telefone">Telefone</option>
+                  <option value="email">E-mail</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Descrição do problema</label>
+                <textarea id="supportMessage" placeholder="Descreva o problema, impacto e horário..."
+                  style="width:100%;height:80px;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif;resize:vertical"></textarea>
+              </div>
+              <button class="btn" style="height:40px;padding:0 16px" onclick="supportCriarChamado()">Abrir Chamado</button>
+            </div>
+
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center">
+              <select id="supportStatusFilter" onchange="supportCarregarChamados()"
+                style="background:#fff;border:1px solid var(--border2);color:var(--brown);font-size:12px;padding:9px 10px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <option value="">Status: todos</option>
+                <option value="aberto">Aberto</option>
+                <option value="em_andamento">Em andamento</option>
+                <option value="resolvido">Resolvido</option>
+              </select>
+              <select id="supportSeverityFilter" onchange="supportCarregarChamados()"
+                style="background:#fff;border:1px solid var(--border2);color:var(--brown);font-size:12px;padding:9px 10px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <option value="">Severidade: todas</option>
+                <option value="critica">Crítica</option>
+                <option value="alta">Alta</option>
+                <option value="media">Média</option>
+                <option value="baixa">Baixa</option>
+              </select>
+              <span id="supportCurrentProtocol" style="font-size:11px;color:var(--gray);font-weight:700">Sem chamado selecionado</span>
+            </div>
+
+            <div id="supportStatus"
+              style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:12px;color:var(--gray)">
+              Abra um chamado para iniciar o suporte operacional.
+            </div>
+
+            <div style="margin-top:10px;overflow-x:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px">
+                <thead>
+                  <tr
+                    style="border-bottom:2px solid var(--border2);color:var(--gray);font-size:10px;letter-spacing:1px;text-transform:uppercase">
+                    <th style="text-align:left;padding:8px 6px">Protocolo</th>
+                    <th style="text-align:left;padding:8px 6px">Assunto</th>
+                    <th style="text-align:center;padding:8px 6px">Severidade</th>
+                    <th style="text-align:center;padding:8px 6px">Status</th>
+                    <th style="text-align:center;padding:8px 6px">Atualizado</th>
+                    <th style="text-align:right;padding:8px 6px">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="supportTicketsBody">
+                  <tr>
+                    <td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Nenhum chamado carregado.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="canvas-card" style="margin-top:12px">
+              <div class="card-h" style="margin-bottom:8px">Detalhes do Chamado</div>
+              <div id="supportDetail"
+                style="max-height:220px;overflow:auto;border:1px solid var(--border2);border-radius:8px;background:#fff;padding:10px;font-size:12px;color:var(--brown)">
+                Selecione um chamado para visualizar as mensagens.
+              </div>
+              <div style="margin-top:10px;display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end">
+                <textarea id="supportReply" placeholder="Responder chamado selecionado..."
+                  style="width:100%;height:64px;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif;resize:vertical"></textarea>
+                <button class="btn dark" style="height:40px;padding:0 14px;background:#24497E;border-color:#24497E" onclick="supportSugerirResposta()">Sugerir Resposta</button>
+                <button class="btn dark" style="height:40px;padding:0 14px" onclick="supportResponderChamado()">Responder</button>
+                <button class="btn dark" style="height:40px;padding:0 14px;background:#2E7D52;border-color:#2E7D52" onclick="supportEncerrarChamado()">Encerrar</button>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
         </div>
       </div>
+
+      {% if false %}
+      <!-- LICENCA -->
+      <div class="section" id="tab-licenca">
+        <div class="page">
+          <div class="sh">
+            <h2>💳 Assinatura da Licença</h2>
+            <p>Gerencie a assinatura mensal de R$ da sua unidade.</p>
+          </div>
+
+          <div class="canvas-card" style="margin-top:18px">
+            <div class="card-h" style="margin-bottom:10px">Status da Licença</div>
+            <div id="licencaStatus"
+              style="padding:12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:13px;color:var(--gray)">
+              Carregando status da licença...
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px">
+              <div style="border:1px solid var(--border2);border-radius:8px;background:#fff;padding:10px 12px">
+                <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--gray);font-weight:700">Plano</div>
+                <div id="licencaPlano" style="margin-top:5px;font-size:13px;color:var(--brown);font-weight:700">—</div>
+              </div>
+              <div style="border:1px solid var(--border2);border-radius:8px;background:#fff;padding:10px 12px">
+                <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--gray);font-weight:700">Status atual</div>
+                <div id="licencaStatusBadge" style="margin-top:5px;font-size:13px;color:var(--brown);font-weight:700">—</div>
+              </div>
+              <div style="border:1px solid var(--border2);border-radius:8px;background:#fff;padding:10px 12px">
+                <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--gray);font-weight:700">Atualizado em</div>
+                <div id="licencaUpdatedAt" style="margin-top:5px;font-size:13px;color:var(--brown);font-weight:700">—</div>
+              </div>
+            </div>
+
+            <div style="margin-top:14px;display:grid;grid-template-columns:2fr 1fr;gap:10px;align-items:end">
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">E-mail
+                  para assinatura (opcional)</label>
+                <input type="email" id="licencaPayerEmail" placeholder="cliente@email.com"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              </div>
+              <button class="btn" style="height:40px" onclick="licencaCriarAssinatura()">Assinar R$ 120/mês</button>
+            </div>
+
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center">
+              <input type="text" id="licencaCheckoutLink" readonly placeholder="Link de assinatura aparecerá aqui"
+                style="width:100%;background:#fff;border:1px solid var(--border2);color:var(--brown);font-size:12px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              <button class="btn dark" style="padding:10px 12px" onclick="licencaCopiarLink()">Copiar</button>
+              <button class="btn dark" style="padding:10px 12px" onclick="licencaAbrirLink()">Abrir</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
 
       {% if current_user and current_user.role == 'admin' %}
       <div class="section" id="tab-admin">
@@ -2409,6 +2605,185 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          <!-- GESTAO DE PAGAMENTOS (MERCADO PAGO) -->
+          <div class="canvas-card" style="margin-top:18px">
+            <div
+              style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+              <div>
+                <div class="card-h">Pagamentos Mercado Pago</div>
+                <div style="font-size:12px;color:var(--gray);line-height:1.6">Gerencie cobranças por atendimento sem sair da aba Admin.</div>
+              </div>
+              <button class="btn dark" style="padding:8px 14px;font-size:12px" onclick="adminPagamentosCarregar()">⟳ Atualizar</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:2fr 2fr 1fr;gap:10px;align-items:end">
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">ID
+                  do Atendimento</label>
+                <input type="number" id="adminPgConsultaId" placeholder="Ex: 123"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              </div>
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">E-mail
+                  do pagador (opcional)</label>
+                <input type="email" id="adminPgPayerEmail" placeholder="cliente@email.com"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              </div>
+              <button class="btn" style="height:40px" onclick="adminPagamentosGerarCheckout()">Gerar Checkout</button>
+            </div>
+
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center">
+              <input type="text" id="adminPgCheckoutLink" readonly placeholder="Link do checkout aparecerá aqui"
+                style="width:100%;background:#fff;border:1px solid var(--border2);color:var(--brown);font-size:12px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              <button class="btn dark" style="padding:10px 12px" onclick="adminPagamentosCopiarLink()">Copiar</button>
+              <button class="btn dark" style="padding:10px 12px" onclick="adminPagamentosAbrirLink()">Abrir</button>
+            </div>
+
+            <div id="adminPgStatus"
+              style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:12px;color:var(--gray)">
+              Informe um atendimento e clique em Atualizar para listar os pagamentos.
+            </div>
+
+            <div style="margin-top:10px;overflow-x:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:680px">
+                <thead>
+                  <tr
+                    style="border-bottom:2px solid var(--border2);color:var(--gray);font-size:10px;letter-spacing:1px;text-transform:uppercase">
+                    <th style="text-align:left;padding:8px 6px">Pagamento MP</th>
+                    <th style="text-align:center;padding:8px 6px">Status</th>
+                    <th style="text-align:right;padding:8px 6px">Valor</th>
+                    <th style="text-align:center;padding:8px 6px">Método</th>
+                    <th style="text-align:center;padding:8px 6px">Aprovado em</th>
+                    <th style="text-align:center;padding:8px 6px">Atualizado em</th>
+                  </tr>
+                </thead>
+                <tbody id="adminPgTabelaBody">
+                  <tr>
+                    <td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Nenhum pagamento carregado.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- SUPORTE OPERACIONAL -->
+          <div class="canvas-card" style="margin-top:18px">
+            <div
+              style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+              <div>
+                <div class="card-h">Suporte Operacional</div>
+                <div style="font-size:12px;color:var(--gray);line-height:1.6">Abra chamados internos, acompanhe status e registre respostas rápidas.</div>
+              </div>
+              <button class="btn dark" style="padding:8px 14px;font-size:12px" onclick="supportCarregarChamados()">⟳ Atualizar</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:end">
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Assunto</label>
+                <input type="text" id="supportSubject" placeholder="Ex: Unidade não consegue acessar o sistema"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+              </div>
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Categoria</label>
+                <select id="supportCategory"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  <option value="geral">Geral</option>
+                  <option value="acesso">Acesso</option>
+                  <option value="orcamento">Orçamento</option>
+                  <option value="simulador">Simulador</option>
+                  <option value="financeiro">Financeiro</option>
+                  <option value="integracao">Integração</option>
+                  <option value="outro">Outro</option>
+                </select>
+              </div>
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Canal</label>
+                <select id="supportChannel"
+                  style="width:100%;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:14px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                  <option value="painel">Painel</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telefone">Telefone</option>
+                  <option value="email">E-mail</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end">
+              <div>
+                <label
+                  style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Descrição do problema</label>
+                <textarea id="supportMessage" placeholder="Descreva o problema, impacto e horário..."
+                  style="width:100%;height:80px;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif;resize:vertical"></textarea>
+              </div>
+              <button class="btn" style="height:40px;padding:0 16px" onclick="supportCriarChamado()">Abrir Chamado</button>
+            </div>
+
+            <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center">
+              <select id="supportStatusFilter" onchange="supportCarregarChamados()"
+                style="background:#fff;border:1px solid var(--border2);color:var(--brown);font-size:12px;padding:9px 10px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <option value="">Status: todos</option>
+                <option value="aberto">Aberto</option>
+                <option value="em_andamento">Em andamento</option>
+                <option value="resolvido">Resolvido</option>
+              </select>
+              <select id="supportSeverityFilter" onchange="supportCarregarChamados()"
+                style="background:#fff;border:1px solid var(--border2);color:var(--brown);font-size:12px;padding:9px 10px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <option value="">Severidade: todas</option>
+                <option value="critica">Crítica</option>
+                <option value="alta">Alta</option>
+                <option value="media">Média</option>
+                <option value="baixa">Baixa</option>
+              </select>
+              <span id="supportCurrentProtocol" style="font-size:11px;color:var(--gray);font-weight:700">Sem chamado selecionado</span>
+            </div>
+
+            <div id="supportStatus"
+              style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:12px;color:var(--gray)">
+              Abra um chamado para iniciar o suporte operacional.
+            </div>
+
+            <div style="margin-top:10px;overflow-x:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px">
+                <thead>
+                  <tr
+                    style="border-bottom:2px solid var(--border2);color:var(--gray);font-size:10px;letter-spacing:1px;text-transform:uppercase">
+                    <th style="text-align:left;padding:8px 6px">Protocolo</th>
+                    <th style="text-align:left;padding:8px 6px">Assunto</th>
+                    <th style="text-align:center;padding:8px 6px">Severidade</th>
+                    <th style="text-align:center;padding:8px 6px">Status</th>
+                    <th style="text-align:center;padding:8px 6px">Atualizado</th>
+                    <th style="text-align:right;padding:8px 6px">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="supportTicketsBody">
+                  <tr>
+                    <td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Nenhum chamado carregado.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="canvas-card" style="margin-top:12px">
+              <div class="card-h" style="margin-bottom:8px">Detalhes do Chamado</div>
+              <div id="supportDetail"
+                style="max-height:220px;overflow:auto;border:1px solid var(--border2);border-radius:8px;background:#fff;padding:10px;font-size:12px;color:var(--brown)">
+                Selecione um chamado para visualizar as mensagens.
+              </div>
+              <div style="margin-top:10px;display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end">
+                <textarea id="supportReply" placeholder="Responder chamado selecionado..."
+                  style="width:100%;height:64px;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif;resize:vertical"></textarea>
+                <button class="btn dark" style="height:40px;padding:0 14px;background:#24497E;border-color:#24497E" onclick="supportSugerirResposta()">Sugerir Resposta</button>
+                <button class="btn dark" style="height:40px;padding:0 14px" onclick="supportResponderChamado()">Responder</button>
+                <button class="btn dark" style="height:40px;padding:0 14px;background:#2E7D52;border-color:#2E7D52" onclick="supportEncerrarChamado()">Encerrar</button>
+              </div>
             </div>
           </div>
 
@@ -2499,6 +2874,38 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
       <div class="toast" id="toast"></div>
 
     </main>
+  </div>
+
+  <div id="ssPanel"
+    style="display:none;position:fixed;left:18px;bottom:72px;z-index:2400;width:min(380px,calc(100vw - 36px));max-height:min(70vh,560px);overflow:auto;background:#fff;border:1px solid var(--border2);border-radius:12px;box-shadow:0 16px 38px rgba(0,0,0,.24)">
+    <div style="padding:12px 14px;background:linear-gradient(135deg,#1A3051,#24497E);color:#fff;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;gap:8px;align-items:center">
+      <div>
+        <div style="font-size:13px;font-weight:700">Autoatendimento IA</div>
+        <div style="font-size:11px;opacity:.85">Perguntas frequentes e ajuda rápida</div>
+      </div>
+      <button onclick="selfServiceToggle(false)" style="border:none;background:rgba(255,255,255,.2);color:#fff;border-radius:999px;width:28px;height:28px;cursor:pointer">✕</button>
+    </div>
+
+    <div style="padding:12px 14px">
+      <label style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gray);font-weight:700;display:block;margin-bottom:6px">Sua dúvida</label>
+      <textarea id="ssQuestion" placeholder="Ex: não consigo gerar o PDF do orçamento"
+        style="width:100%;height:82px;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:8px;outline:none;font-family:'Avenir','Nunito',sans-serif;resize:vertical"></textarea>
+
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <button class="btn" style="padding:9px 12px" onclick="selfServiceAsk()">Perguntar</button>
+        <button class="btn dark" style="padding:9px 12px;background:#2E7D52;border-color:#2E7D52" onclick="selfServiceAbrirChamado()">Ainda preciso de ajuda</button>
+      </div>
+
+      <div id="ssStatus"
+        style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:12px;color:var(--gray)">
+        Digite sua dúvida para receber uma resposta automática.
+      </div>
+
+      <div id="ssAnswer"
+        style="margin-top:10px;padding:10px 12px;border-radius:8px;background:#fff;border:1px solid var(--border2);font-size:12px;color:var(--brown);line-height:1.6;white-space:pre-wrap">
+        A resposta aparecerá aqui.
+      </div>
+    </div>
   </div>
 
   <footer>
@@ -2807,6 +3214,118 @@ MAPA FUNCIONAL DO TEMPLATE PRINCIPAL (index.html)
         style="position:absolute;top:-12px;right:-12px;width:34px;height:34px;border:none;border-radius:50%;background:#fff;color:#1A3051;font-size:20px;cursor:pointer;box-shadow:0 8px 20px rgba(0,0,0,.35)">×</button>
       <img id="catImageModalImg" src="" alt=""
         style="max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,.45)">
+    </div>
+  </div>
+
+  <div id="accountModal"
+    style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:2300;align-items:center;justify-content:center;padding:16px;overflow-y:auto">
+    <div
+      style="background:#fff;border-radius:12px;width:100%;max-width:560px;box-shadow:0 24px 60px rgba(0,0,0,0.3);overflow:hidden;margin:auto">
+      <div
+        style="background:linear-gradient(135deg,#1A3051,#24497E);padding:18px 20px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="color:#fff;font-weight:700;font-size:15px;letter-spacing:.5px">Minha Conta</div>
+          <div style="color:rgba(255,255,255,.65);font-size:11px;margin-top:2px">Dados de acesso e segurança</div>
+        </div>
+        <button onclick="closeAccountModal()"
+          style="background:rgba(255,255,255,.15);border:none;color:#fff;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:14px">✕</button>
+      </div>
+
+      <div style="padding:18px 20px;display:flex;flex-direction:column;gap:14px">
+        <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:12px">
+          <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--gray);margin-bottom:8px">Informações da conta</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">Unidade</div>
+              <div id="accountStoreName" style="font-size:13px;color:var(--brown);font-weight:700">-</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">Login</div>
+              <div id="accountUsername" style="font-size:13px;color:var(--brown);font-weight:700">-</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">Perfil</div>
+              <div id="accountRole" style="font-size:13px;color:var(--brown);font-weight:700">-</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">ID da loja</div>
+              <div id="accountStoreId" style="font-size:13px;color:var(--brown);font-weight:700">-</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border2);border-radius:8px;padding:12px">
+          <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--gray);margin-bottom:10px">Trocar senha</div>
+
+          <div style="display:grid;gap:10px">
+            <div>
+              <label style="font-size:11px;color:var(--brown);font-weight:700;display:block;margin-bottom:6px">Senha atual</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="password" id="accCurrentPassword" placeholder="Digite sua senha atual"
+                  style="flex:1;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <button type="button" onclick="togglePasswordField('accCurrentPassword', this)" aria-pressed="false"
+                  style="padding:10px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">Mostrar</button>
+              </div>
+            </div>
+
+            <div>
+              <label style="font-size:11px;color:var(--brown);font-weight:700;display:block;margin-bottom:6px">Nova senha</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="password" id="accNewPassword" placeholder="Mínimo de 6 caracteres"
+                  style="flex:1;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <button type="button" onclick="togglePasswordField('accNewPassword', this)" aria-pressed="false"
+                  style="padding:10px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">Mostrar</button>
+              </div>
+            </div>
+
+            <div>
+              <label style="font-size:11px;color:var(--brown);font-weight:700;display:block;margin-bottom:6px">Confirmar nova senha</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="password" id="accConfirmPassword" placeholder="Repita a nova senha"
+                  style="flex:1;background:var(--cream2);border:1px solid var(--border);color:var(--brown);font-size:13px;padding:10px 12px;border-radius:6px;outline:none;font-family:'Avenir','Nunito',sans-serif">
+                <button type="button" onclick="togglePasswordField('accConfirmPassword', this)" aria-pressed="false"
+                  style="padding:10px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--brown);font-size:11px;font-weight:700;cursor:pointer">Mostrar</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="accountStatus"
+            style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:12px;color:var(--gray)">
+            Para sua segurança, confirme a senha atual antes de alterar.
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <button class="btn" id="accountChangePassBtn" style="flex:1;min-width:180px" onclick="changeAccountPassword()">Atualizar senha</button>
+            <button class="btn dark" style="padding:10px 14px" onclick="closeAccountModal()">Fechar</button>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border2);border-radius:8px;padding:12px">
+          <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--gray);margin-bottom:10px">Licença da unidade</div>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+            <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:9px 10px">
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">Plano</div>
+              <div id="accountLicensePlan" style="font-size:12px;color:var(--brown);font-weight:700;margin-top:4px">—</div>
+            </div>
+            <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:9px 10px">
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">Status</div>
+              <div id="accountLicenseStatus" style="font-size:12px;color:var(--brown);font-weight:700;margin-top:4px">Carregando...</div>
+            </div>
+            <div style="background:var(--cream2);border:1px solid var(--border2);border-radius:8px;padding:9px 10px">
+              <div style="font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:1px">Atualizado em</div>
+              <div id="accountLicenseUpdatedAt" style="font-size:12px;color:var(--brown);font-weight:700;margin-top:4px">-</div>
+            </div>
+          </div>
+          <div id="accountLicenseNote"
+            style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--cream2);border:1px solid var(--border2);font-size:12px;color:var(--gray)">
+            Carregando informações da licença da unidade...
+          </div>
+        </div>
+
+        <div style="background:#f7f9fc;border:1px solid var(--border2);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--gray);line-height:1.6">
+          <strong style="color:var(--brown)">Esqueceu a senha?</strong> Peça para um administrador da operação redefinir seu acesso na aba Admin.
+        </div>
+      </div>
     </div>
   </div>
   <script id="ff-current-user-json" type="application/json">{{ (current_user or {}) | tojson }}</script>

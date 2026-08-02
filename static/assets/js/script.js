@@ -79,6 +79,9 @@ let _qiPersistTimer=null;
 let _enhApplyTimer=null;
 let _enhApplyToken=0;
 let _qiRenderQueued=false;
+let _licencaBloqueioAtivo=false;
+const FF_LICENCA_TAB_ENABLED=false;
+const FF_SHOW_LICENSE_PLAN_VALUE=false;
 const ENH_REMOTE_TIMEOUT_MS=45000;
 const ENH_LOCAL_MAX_SIDE=16384;
 const ENH_LOCAL_MAX_PIXELS=140000000;
@@ -168,8 +171,17 @@ async function _saveAs(blob, suggestedName, mimeType) {
 //  NAVEGAÇÃO
 // ─────────────────────────────────────────────────────────
 function switchTab(id,btn){
+  if(!FF_LICENCA_TAB_ENABLED && id==='licenca'){
+    id='quadros';
+  }
+  if(typeof _licencaPodeAcessarTab==='function' && !_licencaPodeAcessarTab(id)){
+    if(id!=='licenca') toast('Licença inativa. Regularize na aba Licença para desbloquear o app.');
+    id='licenca';
+  }
+  const target=document.getElementById('tab-'+id);
+  if(!target) return;
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-  document.getElementById('tab-'+id).classList.add('active');
+  target.classList.add('active');
   if(id==='quadros'&&typeof qImg!=='undefined'&&qImg) requestAnimationFrame(()=>qiRenderDesigner());
   // Sync desktop nav
   document.querySelectorAll('[data-nav]').forEach(b=>b.classList.toggle('active',b.dataset.nav===id));
@@ -205,13 +217,25 @@ function switchTab(id,btn){
   }
   if(id==='clientes' && typeof carregarClientes==='function'){
     carregarClientes();
+    if (typeof supportCarregarChamados === 'function') {
+      supportCarregarChamados();
+    }
   }
   if(id==='catalogo'){
     ffCatalogInit();
     ffCatalogRender();
   }
+  if(id==='licenca' && typeof licencaCarregarStatus==='function'){
+    licencaCarregarStatus();
+  }
   if(id==='admin' && typeof adminDashboardLoad==='function'){
     adminDashboardLoad();
+    if (typeof adminPagamentosRefreshOnTab === 'function') {
+      adminPagamentosRefreshOnTab();
+    }
+    if (typeof supportCarregarChamados === 'function') {
+      supportCarregarChamados();
+    }
   }
 
   const activeDesktopNav=document.querySelector('header nav .nav-item.active');
@@ -2438,6 +2462,7 @@ const ROOM_PATHS={
   qcrianca: '/static/assets/img/rooms/qcrianca.jpg',
   gourmet:  '/static/assets/img/rooms/gourmet.jpg',
 };
+const ROOM_BASE_PATHS={ ...ROOM_PATHS };
 const ROOM_DEFAULTS={
   sala1:   {x:50,y:38,w:100,h:70}, sala2:   {x:50,y:35,w:120,h:80},
   sala3:   {x:50,y:40,w:90,h:60},  sala4:   {x:50,y:36,w:80,h:60},
@@ -2458,6 +2483,13 @@ let _roomStoreInitPromise=null;
 let _roomStoreSaveTimer=null;
 let _roomStoreSaveInFlight=null;
 let _roomStorePendingSync=false;
+
+function _roomIsUsableSrc(src){
+  if(typeof src!=='string') return false;
+  const v=src.trim();
+  if(!v) return false;
+  return v.startsWith('data:image/') || v.startsWith('/static/') || /^https?:\/\//i.test(v) || v.startsWith('blob:');
+}
 
 function _roomReadLegacyStore(){
   try{
@@ -2497,8 +2529,18 @@ function _roomWriteCache(data, updated_at){
 
 function _roomNormalizeStore(data){
   const safe = data && typeof data === 'object' ? data : {};
-  const overrides = safe.overrides && typeof safe.overrides === 'object' ? safe.overrides : {};
-  const customs = Array.isArray(safe.customs) ? safe.customs.filter(c => c && c.key && c.src) : [];
+  const rawOverrides = safe.overrides && typeof safe.overrides === 'object' ? safe.overrides : {};
+  const overrides = {};
+  Object.keys(rawOverrides).forEach((key)=>{
+    const value = rawOverrides[key];
+    if(_roomIsUsableSrc(value)) overrides[key] = String(value).trim();
+  });
+  const customs = Array.isArray(safe.customs)
+    ? safe.customs.filter(c => c && c.key && _roomIsUsableSrc(c.src)).map(c => ({
+        ...c,
+        src: String(c.src).trim(),
+      }))
+    : [];
   return { overrides, customs };
 }
 
@@ -2614,12 +2656,13 @@ async function _roomValidateCacheInBackground(cachedUpdatedAt){
 
 function _roomApplyOverrides(){
   const data=_roomNormalizeStore(_roomLoadStore());
+  Object.keys(ROOM_BASE_PATHS).forEach((key)=>{ ROOM_PATHS[key]=ROOM_BASE_PATHS[key]; });
   Object.keys(data.overrides).forEach(key=>{
-    if(data.overrides[key]) ROOM_PATHS[key]=data.overrides[key];
+    if(ROOM_BASE_PATHS[key] && _roomIsUsableSrc(data.overrides[key])) ROOM_PATHS[key]=String(data.overrides[key]).trim();
   });
   data.customs.forEach(c=>{
-    if(!c||!c.key||!c.src) return;
-    ROOM_PATHS[c.key]=c.src;
+    if(!c||!c.key||!_roomIsUsableSrc(c.src)) return;
+    ROOM_PATHS[c.key]=String(c.src).trim();
     ROOM_DEFAULTS[c.key]=c.defaults||{x:50,y:38,w:80,h:60};
   });
 }
@@ -2637,7 +2680,17 @@ function _roomUpdateThumbImage(key, src, label){
     img=document.createElement('img');
     thumb.prepend(img);
   }
-  img.src=src;
+  img.onerror=()=>{
+    const fallback = ROOM_BASE_PATHS[key];
+    if(fallback && img.dataset.ffFallback!=='1'){
+      img.dataset.ffFallback='1';
+      img.src=fallback;
+      return;
+    }
+    thumb.classList.add('no-img');
+  };
+  img.dataset.ffFallback='0';
+  img.src=_roomIsUsableSrc(src) ? String(src).trim() : (ROOM_BASE_PATHS[key] || src);
   img.alt=label||thumb.getAttribute('data-room-label')||'Ambiente';
 }
 
@@ -2978,7 +3031,8 @@ function loadPresetRoom(key){
   roomImg.crossOrigin='anonymous';
   roomImg.onload=()=>{ wEnvImg=roomImg; _applyRoomDefaults(key); checkWall(); toast('Ambiente carregado!'); };
   roomImg.onerror=()=>{ wEnvImg=generateRoomCanvas(key); _applyRoomDefaults(key); checkWall(); toast('Ambiente ilustrativo. Substitua pela foto real em static/assets/img/rooms/'+key+'.jpg'); };
-  roomImg.src=ROOM_PATHS[key];
+  const src = _roomIsUsableSrc(ROOM_PATHS[key]) ? ROOM_PATHS[key] : ROOM_BASE_PATHS[key];
+  roomImg.src=src || ROOM_BASE_PATHS.sala1;
 }
 
 function _applyRoomDefaults(key){
@@ -6541,6 +6595,10 @@ let _clientesPorId = {};
 let _usuarioAtual = (window.FF_CURRENT_USER && typeof window.FF_CURRENT_USER === 'object') ? window.FF_CURRENT_USER : null;
 let _usuarioEdicaoId = null;
 let _usuariosSistemaPorId = {};
+let _supportTicketsById = {};
+let _supportTicketAtualId = null;
+let _ssLastQuestion = '';
+let _ssLastResponse = null;
 
 function _esc(s) {
   return String(s || '')
@@ -6577,6 +6635,157 @@ function togglePasswordField(inputId, triggerEl) {
   if (triggerEl) {
     triggerEl.textContent = showing ? 'Mostrar' : 'Ocultar';
     triggerEl.setAttribute('aria-pressed', showing ? 'false' : 'true');
+  }
+}
+
+function _accountRoleLabel(role) {
+  return String(role || '').toLowerCase() === 'admin' ? 'Administrador' : 'Unidade';
+}
+
+function _setAccountStatus(message, isError = false) {
+  const statusEl = document.getElementById('accountStatus');
+  if (!statusEl) return;
+  statusEl.textContent = message || '';
+  statusEl.style.background = isError ? '#FEF0F0' : 'var(--cream2)';
+  statusEl.style.borderColor = isError ? '#F5C6C6' : 'var(--border2)';
+  statusEl.style.color = isError ? '#B22222' : 'var(--gray)';
+}
+
+function _setAccountLicenseNote(message, isError = false) {
+  const noteEl = document.getElementById('accountLicenseNote');
+  if (!noteEl) return;
+  noteEl.textContent = message || '';
+  noteEl.style.background = isError ? '#FFF5F5' : 'var(--cream2)';
+  noteEl.style.borderColor = isError ? '#E6B8B8' : 'var(--border2)';
+  noteEl.style.color = isError ? '#8A1F1F' : 'var(--gray)';
+}
+
+async function refreshAccountLicenseInfo() {
+  try {
+    const out = await _ffApi('/api/licenca/status');
+    const lic = out?.license || {};
+    const planEl = document.getElementById('accountLicensePlan');
+    const statusEl = document.getElementById('accountLicenseStatus');
+    const updatedEl = document.getElementById('accountLicenseUpdatedAt');
+
+    if (planEl) planEl.textContent = FF_SHOW_LICENSE_PLAN_VALUE ? (_fmtBrl(lic.amount || 120) + ' / mês') : '—';
+    if (statusEl) statusEl.textContent = _licencaBadge(lic.status);
+    if (updatedEl) updatedEl.textContent = _fmtDate(lic.updated_at);
+
+    if (lic.store_active) {
+      _setAccountLicenseNote('Licença ativa para esta unidade.');
+    } else {
+      _setAccountLicenseNote('Licença inativa. Procure o administrador para regularização.', true);
+    }
+  } catch (err) {
+    _setAccountLicenseNote(err?.message || 'Erro ao carregar informações da licença.', true);
+  }
+}
+
+async function refreshAccountInfo() {
+  try {
+    const resp = await fetch('/api/auth/me', { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error('Nao foi possivel carregar os dados da conta.');
+    const data = await resp.json();
+    const user = data?.user || {};
+    window.FF_CURRENT_USER = user;
+    _usuarioAtual = user;
+
+    const storeName = user.store_name || user.display_name || user.username || '-';
+    const username = user.username || '-';
+    const role = _accountRoleLabel(user.role);
+    const storeId = user.store_id || '-';
+
+    const storeEl = document.getElementById('accountStoreName');
+    const userEl = document.getElementById('accountUsername');
+    const roleEl = document.getElementById('accountRole');
+    const idEl = document.getElementById('accountStoreId');
+    if (storeEl) storeEl.textContent = storeName;
+    if (userEl) userEl.textContent = username;
+    if (roleEl) roleEl.textContent = role;
+    if (idEl) idEl.textContent = String(storeId);
+  } catch (err) {
+    _setAccountStatus(err?.message || 'Falha ao carregar dados da conta.', true);
+  }
+}
+
+function openAccountModal() {
+  const modal = document.getElementById('accountModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+
+  const current = document.getElementById('accCurrentPassword');
+  const next = document.getElementById('accNewPassword');
+  const confirm = document.getElementById('accConfirmPassword');
+  if (current) current.value = '';
+  if (next) next.value = '';
+  if (confirm) confirm.value = '';
+
+  _setAccountStatus('Para sua seguranca, confirme a senha atual antes de alterar.', false);
+  _setAccountLicenseNote('Carregando informações da licença da unidade...');
+  refreshAccountInfo();
+  refreshAccountLicenseInfo();
+  if (current) setTimeout(() => current.focus(), 40);
+}
+
+function closeAccountModal() {
+  const modal = document.getElementById('accountModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+}
+
+async function changeAccountPassword() {
+  const currentEl = document.getElementById('accCurrentPassword');
+  const newEl = document.getElementById('accNewPassword');
+  const confirmEl = document.getElementById('accConfirmPassword');
+  const btn = document.getElementById('accountChangePassBtn');
+
+  const currentPassword = String(currentEl?.value || '').trim();
+  const newPassword = String(newEl?.value || '').trim();
+  const confirmPassword = String(confirmEl?.value || '').trim();
+
+  if (!currentPassword) {
+    _setAccountStatus('Informe a senha atual.', true);
+    return;
+  }
+  if (newPassword.length < 6) {
+    _setAccountStatus('A nova senha precisa ter pelo menos 6 caracteres.', true);
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    _setAccountStatus('A confirmacao da nova senha nao confere.', true);
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  _setAccountStatus('Atualizando senha...');
+
+  try {
+    const resp = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      }),
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data?.error || 'Nao foi possivel atualizar a senha.');
+    }
+
+    if (currentEl) currentEl.value = '';
+    if (newEl) newEl.value = '';
+    if (confirmEl) confirmEl.value = '';
+    _setAccountStatus(data?.message || 'Senha atualizada com sucesso.', false);
+    toast('Senha atualizada com sucesso.');
+  } catch (err) {
+    _setAccountStatus(err?.message || 'Falha ao atualizar senha.', true);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -7692,6 +7901,649 @@ function _fmtDate(iso) {
   } catch (_) { return iso; }
 }
 
+function _licencaPodeAcessarTab(tabId){
+  if(!FF_LICENCA_TAB_ENABLED) return true;
+  return !_licencaBloqueioAtivo || tabId==='licenca';
+}
+
+function _licencaAplicarBloqueioUI(){
+  if(!FF_LICENCA_TAB_ENABLED) return;
+  document.querySelectorAll('[data-nav],[data-mobilenav]').forEach(el=>{
+    const tabId=(el.dataset.nav||el.dataset.mobilenav||'').trim();
+    if(!tabId) return;
+    const bloquear=_licencaBloqueioAtivo&&tabId!=='licenca';
+    if(bloquear){
+      el.setAttribute('disabled','disabled');
+      el.style.pointerEvents='none';
+      el.style.opacity='.45';
+    } else {
+      el.removeAttribute('disabled');
+      el.style.pointerEvents='';
+      el.style.opacity='';
+    }
+  });
+}
+
+function _licencaSetStatus(msg, isError = false) {
+  const box = document.getElementById('licencaStatus');
+  if (!box) return;
+  box.textContent = msg || '';
+  if (isError) {
+    box.style.background = '#FFF5F5';
+    box.style.borderColor = '#E6B8B8';
+    box.style.color = '#8A1F1F';
+  } else {
+    box.style.background = 'var(--cream2)';
+    box.style.borderColor = 'var(--border2)';
+    box.style.color = 'var(--gray)';
+  }
+}
+
+function _licencaBadge(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'authorized' || key === 'active') return 'Ativa';
+  if (key === 'pending' || key === 'checkout_criado') return 'Pendente';
+  if (key === 'cancelled' || key === 'paused') return 'Inativa';
+  if (key === 'sem_assinatura') return 'Sem assinatura';
+  return status || '—';
+}
+
+async function licencaCarregarStatus() {
+  try {
+    const out = await _ffApi('/api/licenca/status');
+    const lic = out.license || {};
+    _licencaBloqueioAtivo = !Boolean(lic.store_active);
+    _licencaAplicarBloqueioUI();
+    const plano = FF_SHOW_LICENSE_PLAN_VALUE ? (_fmtBrl(lic.amount || 120) + ' / mês') : '—';
+    const planoEl = document.getElementById('licencaPlano');
+    const badgeEl = document.getElementById('licencaStatusBadge');
+    const updEl = document.getElementById('licencaUpdatedAt');
+    if (planoEl) planoEl.textContent = plano;
+    if (badgeEl) badgeEl.textContent = _licencaBadge(lic.status);
+    if (updEl) updEl.textContent = _fmtDate(lic.updated_at);
+
+    if (lic.store_active) {
+      _licencaSetStatus('Licença ativa para esta unidade.');
+    } else {
+      _licencaSetStatus('Licença inativa. Assine para liberar o acesso completo.', true);
+      const currentActive = document.querySelector('.section.active');
+      if(currentActive && currentActive.id!=='tab-licenca'){
+        switchTab('licenca');
+      }
+    }
+  } catch (err) {
+    _licencaSetStatus(err.message || 'Erro ao carregar status da licença.', true);
+  }
+}
+
+async function licencaSincronizarAcessoInicial(){
+  if(!FF_LICENCA_TAB_ENABLED) return;
+  await licencaCarregarStatus();
+  if(_licencaBloqueioAtivo){
+    switchTab('licenca');
+  }
+}
+
+async function licencaCriarAssinatura() {
+  const email = (document.getElementById('licencaPayerEmail')?.value || '').trim();
+  _licencaSetStatus('Gerando assinatura mensal no Mercado Pago...');
+  try {
+    const out = await _ffApi('/api/licenca/assinatura/app', {
+      method: 'POST',
+      body: JSON.stringify({ payer_email: email })
+    });
+    const link = out.init_point || out.sandbox_init_point || '';
+    const linkInput = document.getElementById('licencaCheckoutLink');
+    if (linkInput) linkInput.value = link;
+    _licencaSetStatus('Assinatura criada. Envie ou abra o link para concluir o pagamento inicial.');
+    await licencaCarregarStatus();
+  } catch (err) {
+    _licencaSetStatus(err.message || 'Erro ao criar assinatura.', true);
+  }
+}
+
+async function licencaCopiarLink() {
+  const link = (document.getElementById('licencaCheckoutLink')?.value || '').trim();
+  if (!link) {
+    _licencaSetStatus('Crie a assinatura antes de copiar o link.', true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(link);
+    _licencaSetStatus('Link de assinatura copiado.');
+  } catch (_) {
+    _licencaSetStatus('Não foi possível copiar automaticamente. Copie manualmente.', true);
+  }
+}
+
+function licencaAbrirLink() {
+  const link = (document.getElementById('licencaCheckoutLink')?.value || '').trim();
+  if (!link) {
+    _licencaSetStatus('Crie a assinatura antes de abrir o link.', true);
+    return;
+  }
+  window.open(link, '_blank', 'noopener');
+}
+
+function _adminPgGetConsultaId() {
+  const raw = document.getElementById('adminPgConsultaId')?.value || '';
+  const consultaId = parseInt(raw, 10);
+  return Number.isFinite(consultaId) && consultaId > 0 ? consultaId : 0;
+}
+
+function _adminPgSetStatus(msg, isError = false) {
+  const box = document.getElementById('adminPgStatus');
+  if (!box) return;
+  box.textContent = msg || '';
+  if (isError) {
+    box.style.background = '#FFF5F5';
+    box.style.borderColor = '#E6B8B8';
+    box.style.color = '#8A1F1F';
+  } else {
+    box.style.background = 'var(--cream2)';
+    box.style.borderColor = 'var(--border2)';
+    box.style.color = 'var(--gray)';
+  }
+}
+
+function _adminPgStatusBadge(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'approved') {
+    return '<span style="background:#EBF7F0;color:#2E7D52;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Aprovado</span>';
+  }
+  if (key === 'pending' || key === 'in_process') {
+    return '<span style="background:#FEF6E9;color:#A0520A;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Pendente</span>';
+  }
+  if (key === 'rejected' || key === 'cancelled') {
+    return '<span style="background:#FFF5F5;color:#8A1F1F;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Recusado</span>';
+  }
+  return '<span style="background:var(--cream2);color:var(--brown);padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">' + _esc(status || '—') + '</span>';
+}
+
+function _adminPgRenderTabela(pagamentos) {
+  const body = document.getElementById('adminPgTabelaBody');
+  if (!body) return;
+  const lista = Array.isArray(pagamentos) ? pagamentos : [];
+  if (!lista.length) {
+    body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Nenhum pagamento para este atendimento.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = lista.map(p => {
+    const paymentId = _esc(p.mp_payment_id || p.mp_preference_id || '—');
+    const amount = _fmtBrl(p.amount || 0);
+    return '<tr style="border-bottom:1px solid var(--border2)">' +
+      '<td style="padding:10px 6px;font-family:monospace;color:var(--brown)">' + paymentId + '</td>' +
+      '<td style="padding:10px 6px;text-align:center">' + _adminPgStatusBadge(p.status) + '</td>' +
+      '<td style="padding:10px 6px;text-align:right;font-weight:700;color:#2E7D52">' + amount + '</td>' +
+      '<td style="padding:10px 6px;text-align:center;color:var(--gray)">' + _esc(p.payment_method || '—') + '</td>' +
+      '<td style="padding:10px 6px;text-align:center;color:var(--gray)">' + _esc(_fmtDate(p.approved_at)) + '</td>' +
+      '<td style="padding:10px 6px;text-align:center;color:var(--gray)">' + _esc(_fmtDate(p.updated_at)) + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function adminPagamentosCarregar() {
+  const consultaId = _adminPgGetConsultaId();
+  if (!consultaId) {
+    _adminPgSetStatus('Informe um ID de atendimento válido para carregar pagamentos.', true);
+    return;
+  }
+
+  _adminPgSetStatus('Carregando pagamentos...');
+  try {
+    const out = await _ffApi('/api/pagamentos/mercadopago/consultas/' + consultaId);
+    const lista = out.pagamentos || [];
+    _adminPgRenderTabela(lista);
+    _adminPgSetStatus('Pagamentos carregados: ' + lista.length + '.');
+  } catch (err) {
+    _adminPgRenderTabela([]);
+    _adminPgSetStatus(err.message || 'Erro ao carregar pagamentos.', true);
+  }
+}
+
+function adminPagamentosRefreshOnTab() {
+  const consultaId = _adminPgGetConsultaId();
+  if (!consultaId) return;
+  adminPagamentosCarregar();
+}
+
+async function adminPagamentosGerarCheckout() {
+  const consultaId = _adminPgGetConsultaId();
+  if (!consultaId) {
+    _adminPgSetStatus('Informe um ID de atendimento válido para gerar checkout.', true);
+    return;
+  }
+
+  const email = (document.getElementById('adminPgPayerEmail')?.value || '').trim();
+  _adminPgSetStatus('Gerando checkout no Mercado Pago...');
+  try {
+    const out = await _ffApi('/api/pagamentos/mercadopago/checkout', {
+      method: 'POST',
+      body: JSON.stringify({
+        consulta_id: consultaId,
+        payer_email: email,
+      })
+    });
+
+    const link = out.init_point || out.sandbox_init_point || '';
+    const linkInput = document.getElementById('adminPgCheckoutLink');
+    if (linkInput) linkInput.value = link;
+    _adminPgSetStatus('Checkout gerado com sucesso. Envie o link ao cliente.');
+    await adminPagamentosCarregar();
+  } catch (err) {
+    _adminPgSetStatus(err.message || 'Erro ao gerar checkout.', true);
+  }
+}
+
+async function adminPagamentosCopiarLink() {
+  const link = (document.getElementById('adminPgCheckoutLink')?.value || '').trim();
+  if (!link) {
+    _adminPgSetStatus('Gere um checkout antes de copiar o link.', true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(link);
+    _adminPgSetStatus('Link copiado para a área de transferência.');
+  } catch (_) {
+    _adminPgSetStatus('Não foi possível copiar automaticamente. Selecione e copie manualmente.', true);
+  }
+}
+
+function adminPagamentosAbrirLink() {
+  const link = (document.getElementById('adminPgCheckoutLink')?.value || '').trim();
+  if (!link) {
+    _adminPgSetStatus('Gere um checkout antes de abrir o link.', true);
+    return;
+  }
+  window.open(link, '_blank', 'noopener');
+}
+
+function _supportSetStatus(msg, isError = false) {
+  const box = document.getElementById('supportStatus');
+  if (!box) return;
+  box.textContent = msg || '';
+  if (isError) {
+    box.style.background = '#FFF5F5';
+    box.style.borderColor = '#E6B8B8';
+    box.style.color = '#8A1F1F';
+  } else {
+    box.style.background = 'var(--cream2)';
+    box.style.borderColor = 'var(--border2)';
+    box.style.color = 'var(--gray)';
+  }
+}
+
+function _supportSeverityBadge(sev) {
+  const key = String(sev || '').toLowerCase();
+  if (key === 'critica') return '<span style="background:#FFF0F0;color:#8A1F1F;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Crítica</span>';
+  if (key === 'alta') return '<span style="background:#FEF6E9;color:#A0520A;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Alta</span>';
+  if (key === 'baixa') return '<span style="background:#EBF7F0;color:#2E7D52;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Baixa</span>';
+  return '<span style="background:var(--cream2);color:var(--brown);padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Média</span>';
+}
+
+function _supportStatusBadge(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'resolvido') return '<span style="background:#EBF7F0;color:#2E7D52;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Resolvido</span>';
+  if (key === 'em_andamento') return '<span style="background:#EAF2FF;color:#24497E;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Em andamento</span>';
+  return '<span style="background:#FEF6E9;color:#A0520A;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">Aberto</span>';
+}
+
+function _supportProtocol(ticketId) {
+  const id = Number(ticketId) || 0;
+  return 'SUP-' + String(id).padStart(6, '0');
+}
+
+function _supportRenderDetalhe(ticket, messages) {
+  const detail = document.getElementById('supportDetail');
+  const protocolEl = document.getElementById('supportCurrentProtocol');
+  if (!detail) return;
+
+  if (!ticket) {
+    detail.innerHTML = 'Selecione um chamado para visualizar as mensagens.';
+    if (protocolEl) protocolEl.textContent = 'Sem chamado selecionado';
+    return;
+  }
+
+  const protocol = _supportProtocol(ticket.id);
+  if (protocolEl) protocolEl.textContent = protocol;
+
+  const meta =
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">' +
+      '<strong style="font-size:13px;color:var(--brown)">' + _esc(protocol) + '</strong>' +
+      _supportStatusBadge(ticket.status) +
+      _supportSeverityBadge(ticket.severity) +
+      '<span style="font-size:11px;color:var(--gray)">Categoria: ' + _esc(ticket.category || 'geral') + '</span>' +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--brown);margin-bottom:8px"><strong>Assunto:</strong> ' + _esc(ticket.subject || '-') + '</div>' +
+    '<div style="font-size:12px;color:var(--gray);margin-bottom:10px;padding:8px;border:1px solid var(--border2);border-radius:6px;background:var(--cream2)"><strong>Triagem IA:</strong> ' + _esc(ticket.ai_summary || 'Sem resumo automático.') + '</div>';
+
+  const list = (messages || []).map(m => {
+    const isSupport = String(m.author_type || '').toLowerCase() === 'support';
+    const who = isSupport ? 'Suporte' : (m.author_name || 'Usuário');
+    const bg = isSupport ? '#F2F7FF' : '#FFF';
+    const border = isSupport ? '#CFE0FF' : 'var(--border2)';
+    return (
+      '<div style="border:1px solid ' + border + ';background:' + bg + ';border-radius:8px;padding:8px;margin-bottom:8px">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px">' +
+          '<strong style="font-size:11px;color:' + (isSupport ? '#24497E' : 'var(--brown)') + '">' + _esc(who) + '</strong>' +
+          '<span style="font-size:10px;color:var(--gray)">' + _esc(_fmtDataHora(m.created_at)) + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px;color:var(--brown);white-space:pre-wrap;line-height:1.55">' + _esc(m.message || '') + '</div>' +
+      '</div>'
+    );
+  }).join('');
+
+  detail.innerHTML = meta + (list || '<div style="font-size:12px;color:var(--gray)">Sem mensagens no chamado.</div>');
+}
+
+function _supportRenderTabela(tickets) {
+  const body = document.getElementById('supportTicketsBody');
+  if (!body) return;
+  const list = Array.isArray(tickets) ? tickets : [];
+
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Nenhum chamado encontrado para os filtros selecionados.</td></tr>';
+    _supportTicketAtualId = null;
+    _supportRenderDetalhe(null, []);
+    return;
+  }
+
+  body.innerHTML = list.map(t => {
+    return '<tr style="border-bottom:1px solid var(--border2)">' +
+      '<td style="padding:10px 6px;font-family:monospace;color:var(--brown)">' + _esc(_supportProtocol(t.id)) + '</td>' +
+      '<td style="padding:10px 6px;color:var(--brown)">' + _esc(t.subject || '-') + '</td>' +
+      '<td style="padding:10px 6px;text-align:center">' + _supportSeverityBadge(t.severity) + '</td>' +
+      '<td style="padding:10px 6px;text-align:center">' + _supportStatusBadge(t.status) + '</td>' +
+      '<td style="padding:10px 6px;text-align:center;color:var(--gray)">' + _esc(_fmtDataHora(t.updated_at)) + '</td>' +
+      '<td style="padding:10px 6px;text-align:right">' +
+        '<button class="btn dark" style="padding:6px 10px;font-size:11px" onclick="supportAbrirChamado(' + t.id + ')">Ver</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function supportCarregarChamados() {
+  const body = document.getElementById('supportTicketsBody');
+  if (!body) return;
+
+  body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Carregando chamados...</td></tr>';
+
+  try {
+    const status = (document.getElementById('supportStatusFilter')?.value || '').trim();
+    const severity = (document.getElementById('supportSeverityFilter')?.value || '').trim();
+    const qs = new URLSearchParams();
+    if (status) qs.set('status', status);
+    if (severity) qs.set('severity', severity);
+    qs.set('limit', '100');
+
+    const out = await _ffApi('/api/support/tickets?' + qs.toString());
+    const tickets = out.tickets || [];
+    _supportTicketsById = {};
+    tickets.forEach(t => { _supportTicketsById[t.id] = t; });
+    _supportRenderTabela(tickets);
+    _supportSetStatus('Chamados carregados: ' + tickets.length + '.');
+
+    if (_supportTicketAtualId && _supportTicketsById[_supportTicketAtualId]) {
+      await supportAbrirChamado(_supportTicketAtualId, true);
+    }
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao carregar chamados.', true);
+    body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:#8A1F1F">Falha ao carregar chamados.</td></tr>';
+  }
+}
+
+async function supportCriarChamado() {
+  const subject = (document.getElementById('supportSubject')?.value || '').trim();
+  const category = (document.getElementById('supportCategory')?.value || 'geral').trim();
+  const channel = (document.getElementById('supportChannel')?.value || 'painel').trim();
+  const message = (document.getElementById('supportMessage')?.value || '').trim();
+
+  if (subject.length < 5) {
+    _supportSetStatus('Informe um assunto com pelo menos 5 caracteres.', true);
+    return;
+  }
+  if (message.length < 10) {
+    _supportSetStatus('Descreva o problema com pelo menos 10 caracteres.', true);
+    return;
+  }
+
+  _supportSetStatus('Abrindo chamado...');
+  try {
+    const out = await _ffApi('/api/support/tickets', {
+      method: 'POST',
+      body: JSON.stringify({ subject, category, channel, message })
+    });
+
+    const protocol = out.protocol || _supportProtocol(out.ticket?.id);
+    _supportSetStatus('Chamado aberto com sucesso: ' + protocol + '.');
+    const reply = document.getElementById('supportReply');
+    if (reply) reply.value = '';
+    const subjEl = document.getElementById('supportSubject');
+    const msgEl = document.getElementById('supportMessage');
+    if (subjEl) subjEl.value = '';
+    if (msgEl) msgEl.value = '';
+
+    await supportCarregarChamados();
+    if (out.ticket && out.ticket.id) {
+      await supportAbrirChamado(out.ticket.id);
+    }
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao abrir chamado.', true);
+  }
+}
+
+async function supportAbrirChamado(ticketId, silent = false) {
+  const id = Number(ticketId) || 0;
+  if (!id) return;
+
+  try {
+    const out = await _ffApi('/api/support/tickets/' + id);
+    _supportTicketAtualId = id;
+    _supportRenderDetalhe(out.ticket, out.messages || []);
+    if (!silent) {
+      _supportSetStatus('Chamado ' + (out.protocol || _supportProtocol(id)) + ' carregado.');
+    }
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao abrir chamado.', true);
+  }
+}
+
+async function supportResponderChamado() {
+  if (!_supportTicketAtualId) {
+    _supportSetStatus('Selecione um chamado antes de responder.', true);
+    return;
+  }
+  const message = (document.getElementById('supportReply')?.value || '').trim();
+  if (message.length < 2) {
+    _supportSetStatus('Digite uma resposta para o chamado.', true);
+    return;
+  }
+
+  _supportSetStatus('Enviando resposta...');
+  try {
+    await _ffApi('/api/support/tickets/' + _supportTicketAtualId + '/reply', {
+      method: 'POST',
+      body: JSON.stringify({ message })
+    });
+    const reply = document.getElementById('supportReply');
+    if (reply) reply.value = '';
+    await supportCarregarChamados();
+    await supportAbrirChamado(_supportTicketAtualId, true);
+    _supportSetStatus('Resposta enviada com sucesso.');
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao responder chamado.', true);
+  }
+}
+
+async function supportSugerirResposta() {
+  if (!_supportTicketAtualId) {
+    _supportSetStatus('Selecione um chamado antes de pedir sugestão.', true);
+    return;
+  }
+
+  const reply = document.getElementById('supportReply');
+  const operatorNote = (reply?.value || '').trim();
+  _supportSetStatus('Gerando sugestão automática...');
+
+  try {
+    const out = await _ffApi('/api/support/tickets/' + _supportTicketAtualId + '/suggest-reply', {
+      method: 'POST',
+      body: JSON.stringify({ operator_note: operatorNote })
+    });
+
+    const suggestion = String(out.suggestion || '').trim();
+    if (!suggestion) {
+      _supportSetStatus('A sugestão veio vazia. Tente novamente.', true);
+      return;
+    }
+
+    if (reply) {
+      reply.value = suggestion;
+      reply.focus();
+    }
+
+    const sourceLabel = out.source === 'ai' ? 'IA' : 'fallback';
+    _supportSetStatus('Sugestão aplicada no campo de resposta (' + sourceLabel + ').');
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao gerar sugestão automática.', true);
+  }
+}
+
+async function supportEncerrarChamado() {
+  if (!_supportTicketAtualId) {
+    _supportSetStatus('Selecione um chamado antes de encerrar.', true);
+    return;
+  }
+
+  const ok = window.confirm('Encerrar o chamado selecionado?');
+  if (!ok) return;
+
+  _supportSetStatus('Encerrando chamado...');
+  try {
+    await _ffApi('/api/support/tickets/' + _supportTicketAtualId + '/close', { method: 'POST' });
+    await supportCarregarChamados();
+    await supportAbrirChamado(_supportTicketAtualId, true);
+    _supportSetStatus('Chamado encerrado com sucesso.');
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao encerrar chamado.', true);
+  }
+}
+
+function selfServiceToggle(forceOpen) {
+  const panel = document.getElementById('ssPanel');
+  if (!panel) return;
+  if (typeof forceOpen === 'boolean') {
+    panel.style.display = forceOpen ? 'block' : 'none';
+    return;
+  }
+  panel.style.display = (panel.style.display === 'none' || !panel.style.display) ? 'block' : 'none';
+}
+
+function selfServiceSetStatus(message, kind) {
+  const el = document.getElementById('ssStatus');
+  if (!el) return;
+  el.textContent = message || '';
+
+  if (kind === 'error') {
+    el.style.background = '#FFF5F5';
+    el.style.borderColor = '#E6B8B8';
+    el.style.color = '#8A1F1F';
+    return;
+  }
+
+  if (kind === 'ok') {
+    el.style.background = '#EBF7F0';
+    el.style.borderColor = '#B7DEC2';
+    el.style.color = '#2E7D52';
+    return;
+  }
+
+  el.style.background = 'var(--cream2)';
+  el.style.borderColor = 'var(--border2)';
+  el.style.color = 'var(--gray)';
+}
+
+function selfServiceRenderAnswer(payload) {
+  const box = document.getElementById('ssAnswer');
+  if (!box) return;
+
+  const answer = String((payload && payload.answer) || 'Nao encontrei resposta no momento.').trim();
+  const source = String((payload && payload.source) || 'fallback').toLowerCase();
+  const conf = Number((payload && payload.confidence) || 0);
+  const confPct = Number.isFinite(conf) ? Math.round(conf * 100) : 0;
+
+  let sourceLabel = 'Base interna';
+  if (source === 'ai') sourceLabel = 'IA';
+  if (source === 'fallback') sourceLabel = 'Assistente';
+
+  box.textContent = answer + '\n\nFonte: ' + sourceLabel + ' | Confianca: ' + confPct + '%';
+}
+
+async function selfServiceAsk() {
+  const questionEl = document.getElementById('ssQuestion');
+  if (!questionEl) return;
+
+  const question = String(questionEl.value || '').trim();
+  if (question.length < 5) {
+    selfServiceSetStatus('Descreva sua duvida com pelo menos 5 caracteres.', 'error');
+    return;
+  }
+
+  _ssLastQuestion = question;
+  selfServiceSetStatus('Consultando base de conhecimento...');
+
+  try {
+    const out = await _ffApi('/api/support/self-service', {
+      method: 'POST',
+      body: JSON.stringify({ question })
+    });
+
+    _ssLastResponse = out || null;
+    selfServiceRenderAnswer(out || {});
+
+    if (out && out.needs_handoff) {
+      selfServiceSetStatus('Posso abrir um chamado automaticamente para continuar o atendimento.', 'ok');
+    } else {
+      selfServiceSetStatus('Resposta gerada com sucesso.', 'ok');
+    }
+  } catch (err) {
+    selfServiceSetStatus(err.message || 'Erro ao consultar autoatendimento.', 'error');
+  }
+}
+
+async function selfServiceAbrirChamado() {
+  const questionEl = document.getElementById('ssQuestion');
+  if (!questionEl) return;
+
+  const question = String(questionEl.value || _ssLastQuestion || '').trim();
+  if (question.length < 5) {
+    selfServiceSetStatus('Preencha uma duvida valida antes de abrir chamado.', 'error');
+    return;
+  }
+
+  selfServiceSetStatus('Abrindo chamado automaticamente...');
+  try {
+    const out = await _ffApi('/api/support/self-service', {
+      method: 'POST',
+      body: JSON.stringify({ question, auto_create_ticket: true })
+    });
+
+    _ssLastResponse = out || null;
+    selfServiceRenderAnswer(out || {});
+
+    if (out && out.ticket && out.ticket.protocol) {
+      selfServiceSetStatus('Chamado aberto: ' + out.ticket.protocol + '.', 'ok');
+      supportCarregarChamados();
+      return;
+    }
+
+    selfServiceSetStatus('Nao foi necessario abrir chamado para esta duvida.', 'ok');
+  } catch (err) {
+    selfServiceSetStatus(err.message || 'Erro ao abrir chamado automaticamente.', 'error');
+  }
+}
+
 async function adminDashboardLoad() {
   const body = document.getElementById('adminDashBody');
   if (!body) return;
@@ -7989,9 +8841,30 @@ document.addEventListener('DOMContentLoaded', function() {
       if (e.target === orcModal) fecharOrcamento();
     });
   }
+  const accountModal = document.getElementById('accountModal');
+  if (accountModal) {
+    accountModal.addEventListener('click', function(e) {
+      if (e.target === accountModal) closeAccountModal();
+    });
+  }
   ffCatalogInit();
   ffCatalogRender();
   cancelarEdicaoUsuario();
   carregarUsuariosSistema();
   carregarClientes();
+  supportCarregarChamados();
+
+  const params = new URLSearchParams(window.location.search || '');
+  const tab = (params.get('tab') || '').trim().toLowerCase();
+  if (FF_LICENCA_TAB_ENABLED && tab === 'licenca') {
+    switchTab('licenca');
+    const pagamento = (params.get('pagamento') || '').trim().toLowerCase();
+    if (pagamento === 'sucesso') toast('Pagamento confirmado. Assinatura ativa.');
+    else if (pagamento === 'pendente') toast('Pagamento pendente. Aguarde a confirmação do Mercado Pago.');
+    else if (pagamento === 'falha') toast('Falha no pagamento da assinatura. Tente novamente.');
+  }
+
+  if(FF_LICENCA_TAB_ENABLED){
+    licencaSincronizarAcessoInicial();
+  }
 });

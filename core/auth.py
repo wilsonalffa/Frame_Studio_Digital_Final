@@ -51,11 +51,6 @@ def get_authenticated_user():
         g._auth_user = None
         return None
 
-    if not row['store_active']:
-        clear_session_user()
-        g._auth_user = None
-        return None
-
     user = row_to_user(row)
     user['store_name'] = row['store_name'] or ''
 

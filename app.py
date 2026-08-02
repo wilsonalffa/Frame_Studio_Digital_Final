@@ -26,12 +26,14 @@ from routes.admin_routes import admin_bp
 from routes.crm_routes import crm_bp
 from routes.camera_routes import camera_bp
 from routes.ai_routes import ai_bp
+from routes.support_routes import support_bp
 
 app.register_blueprint(main_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(crm_bp)
 app.register_blueprint(camera_bp)
 app.register_blueprint(ai_bp)
+app.register_blueprint(support_bp)
 
 init_db()
 

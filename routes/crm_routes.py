@@ -1,10 +1,579 @@
 from flask import Blueprint, jsonify, request
+import hashlib
+import hmac
 import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from core.auth import login_required, current_store_id, current_user_id
 from core.db import get_db, inserted_id, load_store_state, save_store_state
-from core.utils import row_to_cliente, row_to_consulta, normalize_store_state_scope, default_store_state, now_iso
+from core.utils import row_to_cliente, row_to_consulta, normalize_store_state_scope, default_store_state, now_iso, decode_json_field
 
 crm_bp = Blueprint('crm', __name__)
+
+MERCADOPAGO_API_BASE = 'https://api.mercadopago.com'
+MERCADOPAGO_CURRENCY = (os.environ.get('MP_CURRENCY') or 'BRL').strip().upper() or 'BRL'
+MERCADOPAGO_ACCESS_TOKEN = (os.environ.get('MP_ACCESS_TOKEN') or '').strip()
+MERCADOPAGO_WEBHOOK_SECRET = (os.environ.get('MP_WEBHOOK_SECRET') or '').strip()
+APP_BASE_URL = (os.environ.get('FF_BASE_URL') or '').strip().rstrip('/')
+
+
+def _room_is_usable_src(src):
+    if not isinstance(src, str):
+        return False
+    value = src.strip()
+    if not value:
+        return False
+    return (
+        value.startswith('data:image/')
+        or value.startswith('/static/')
+        or value.startswith('blob:')
+        or value.startswith('http://')
+        or value.startswith('https://')
+    )
+
+
+def _sanitize_rooms_store_state(data):
+    safe = data if isinstance(data, dict) else {}
+    raw_overrides = safe.get('overrides') if isinstance(safe.get('overrides'), dict) else {}
+    raw_customs = safe.get('customs') if isinstance(safe.get('customs'), list) else []
+
+    overrides = {}
+    for key, src in raw_overrides.items():
+        key_name = str(key or '').strip()
+        if key_name and _room_is_usable_src(src):
+            overrides[key_name] = str(src).strip()
+
+    customs = []
+    for item in raw_customs:
+        if not isinstance(item, dict):
+            continue
+        key_name = str(item.get('key') or '').strip()
+        src = item.get('src')
+        if not key_name or not _room_is_usable_src(src):
+            continue
+        clean = dict(item)
+        clean['key'] = key_name
+        clean['src'] = str(src).strip()
+        customs.append(clean)
+
+    return {'overrides': overrides, 'customs': customs}
+
+
+def _parse_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _mercadopago_request(method, path, payload=None):
+    if not MERCADOPAGO_ACCESS_TOKEN:
+        raise RuntimeError('Defina MP_ACCESS_TOKEN para habilitar pagamentos via Mercado Pago.')
+
+    url = f'{MERCADOPAGO_API_BASE}{path}'
+    headers = {
+        'Authorization': f'Bearer {MERCADOPAGO_ACCESS_TOKEN}',
+        'Content-Type': 'application/json',
+    }
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req = urllib.request.Request(url=url, data=body, headers=headers, method=method.upper())
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode('utf-8')
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = ''
+        try:
+            payload = exc.read().decode('utf-8')
+            parsed = json.loads(payload)
+            detail = parsed.get('message') or parsed.get('error') or payload
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f'Falha na API do Mercado Pago ({exc.code}): {detail}') from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f'Erro de conexao com Mercado Pago: {exc.reason}') from exc
+
+
+def _is_license_event_from_metadata(metadata):
+    return str((metadata or {}).get('license_type') or '').strip().lower() in ('vitalicia', 'mensal')
+
+
+def _extract_ids_from_external_reference(external_reference):
+    consulta_id = None
+    store_id = None
+    owner_user_id = None
+    is_license = False
+    raw = str(external_reference or '').strip()
+    if not raw:
+        return consulta_id, store_id, owner_user_id, is_license
+
+    parts = [p.strip() for p in raw.split(':') if p.strip()]
+    for idx, part in enumerate(parts):
+        if part == 'licenca':
+            is_license = True
+        if part == 'consulta' and idx + 1 < len(parts):
+            consulta_id = _parse_int(parts[idx + 1])
+        elif part == 'store' and idx + 1 < len(parts):
+            store_id = _parse_int(parts[idx + 1])
+        elif part == 'user' and idx + 1 < len(parts):
+            owner_user_id = _parse_int(parts[idx + 1])
+    return consulta_id, store_id, owner_user_id, is_license
+
+
+def _apply_license_activation(conn, store_id, owner_user_id):
+    if not store_id:
+        return
+    now = now_iso()
+    conn.execute('UPDATE stores SET is_active = ?, updated_at = ? WHERE id = ?', (True, now, store_id))
+    if owner_user_id:
+        conn.execute('UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?', (True, now, owner_user_id))
+    else:
+        conn.execute('UPDATE users SET is_active = ?, updated_at = ? WHERE store_id = ?', (True, now, store_id))
+
+
+def _apply_license_deactivation(conn, store_id, owner_user_id):
+    if not store_id:
+        return
+    now = now_iso()
+    conn.execute('UPDATE stores SET is_active = ?, updated_at = ? WHERE id = ?', (False, now, store_id))
+    if owner_user_id:
+        conn.execute('UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?', (False, now, owner_user_id))
+    else:
+        conn.execute('UPDATE users SET is_active = ?, updated_at = ? WHERE store_id = ?', (False, now, store_id))
+
+
+def _validate_mercadopago_signature(data_id):
+    if not MERCADOPAGO_WEBHOOK_SECRET:
+        return True
+
+    x_signature = (request.headers.get('x-signature') or '').strip()
+    x_request_id = (request.headers.get('x-request-id') or '').strip()
+
+    if not x_signature or not x_request_id:
+        return False
+
+    signature_data = {}
+    for item in x_signature.split(','):
+        if '=' not in item:
+            continue
+        key, val = item.split('=', 1)
+        signature_data[key.strip()] = val.strip()
+
+    ts = signature_data.get('ts')
+    v1 = signature_data.get('v1')
+    if not ts or not v1:
+        return False
+
+    manifest = f'id:{data_id};request-id:{x_request_id};ts:{ts};'
+    digest = hmac.new(
+        MERCADOPAGO_WEBHOOK_SECRET.encode('utf-8'),
+        manifest.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(digest, v1)
+
+
+def _resolve_public_base_url():
+    if APP_BASE_URL:
+        return APP_BASE_URL
+    return request.url_root.rstrip('/')
+
+
+def _upsert_consulta_pagamento(conn, consulta_id, store_id, payment_snapshot):
+    if not consulta_id or not store_id:
+        return
+
+    row = conn.execute(
+        'SELECT id, status, pagamentos_json FROM consultas WHERE id = ? AND store_id = ?',
+        (consulta_id, store_id)
+    ).fetchone()
+    if not row:
+        return
+
+    pagamentos = decode_json_field(row['pagamentos_json'], [])
+    if not isinstance(pagamentos, list):
+        pagamentos = []
+
+    target_idx = -1
+    target_payment_id = str(payment_snapshot.get('mp_payment_id') or '').strip()
+    for idx, item in enumerate(pagamentos):
+        if not isinstance(item, dict):
+            continue
+        same_gateway = str(item.get('gateway') or '').strip().lower() == 'mercadopago'
+        same_id = str(item.get('mp_payment_id') or '').strip() == target_payment_id
+        if same_gateway and same_id:
+            target_idx = idx
+            break
+
+    if target_idx >= 0:
+        pagamentos[target_idx] = payment_snapshot
+    else:
+        pagamentos.append(payment_snapshot)
+
+    novo_status = row['status'] or 'em andamento'
+    if payment_snapshot.get('status') == 'approved':
+        novo_status = 'pago'
+
+    conn.execute(
+        'UPDATE consultas SET pagamentos_json = ?, status = ? WHERE id = ? AND store_id = ?',
+        (json.dumps(pagamentos, ensure_ascii=False), novo_status, consulta_id, store_id)
+    )
+
+
+@crm_bp.route('/api/pagamentos/mercadopago/checkout', methods=['POST'])
+@login_required
+def criar_checkout_mercadopago():
+    body = request.get_json(silent=True) or {}
+    consulta_id = _parse_int(body.get('consulta_id'))
+    if not consulta_id:
+        return jsonify({'error': 'Informe consulta_id para gerar o checkout.'}), 400
+
+    store_id = current_store_id()
+    with get_db() as conn:
+        row = conn.execute(
+            '''
+            SELECT cs.*, c.nome AS cliente_nome
+            FROM consultas cs
+            INNER JOIN clientes c ON c.id = cs.cliente_id
+            WHERE cs.id = ? AND cs.store_id = ?
+            LIMIT 1
+            ''',
+            (consulta_id, store_id)
+        ).fetchone()
+
+        if not row:
+            return jsonify({'error': 'Consulta nao encontrada para sua loja.'}), 404
+
+        amount = float(row['total'] or row['preco'] or 0)
+        if amount <= 0:
+            return jsonify({'error': 'A consulta precisa ter valor total maior que zero.'}), 400
+
+        descricao = (body.get('descricao') or '').strip() or f'Consulta #{consulta_id} - {row["cliente_nome"]}'
+        external_reference = f'consulta:{consulta_id}:store:{store_id}'
+        base_url = _resolve_public_base_url()
+
+        payload = {
+            'items': [
+                {
+                    'title': descricao,
+                    'quantity': 1,
+                    'currency_id': MERCADOPAGO_CURRENCY,
+                    'unit_price': round(amount, 2),
+                }
+            ],
+            'external_reference': external_reference,
+            'notification_url': f'{base_url}/api/pagamentos/mercadopago/webhook',
+            'back_urls': {
+                'success': f'{base_url}/?pagamento=sucesso',
+                'failure': f'{base_url}/?pagamento=falha',
+                'pending': f'{base_url}/?pagamento=pendente',
+            },
+            'auto_return': 'approved',
+            'metadata': {
+                'consulta_id': consulta_id,
+                'store_id': store_id,
+                'owner_user_id': current_user_id(),
+            },
+        }
+
+        payer_email = (body.get('payer_email') or '').strip()
+        if payer_email:
+            payload['payer'] = {'email': payer_email}
+
+        try:
+            preference = _mercadopago_request('POST', '/checkout/preferences', payload)
+        except RuntimeError as exc:
+            return jsonify({'error': str(exc)}), 502
+
+        now = now_iso()
+        preference_id = str(preference.get('id') or '').strip()
+        existing = conn.execute(
+            'SELECT id FROM pagamentos WHERE mp_preference_id = ? AND store_id = ? LIMIT 1',
+            (preference_id, store_id)
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                '''
+                UPDATE pagamentos
+                SET status = ?, amount = ?, currency = ?, external_reference = ?, raw_json = ?, updated_at = ?
+                WHERE id = ?
+                ''',
+                (
+                    'checkout_criado',
+                    round(amount, 2),
+                    MERCADOPAGO_CURRENCY,
+                    external_reference,
+                    json.dumps(preference, ensure_ascii=False),
+                    now,
+                    existing['id'],
+                )
+            )
+        else:
+            conn.execute(
+                '''
+                INSERT INTO pagamentos (
+                    store_id, owner_user_id, consulta_id, gateway, mp_preference_id, external_reference,
+                    status, amount, currency, raw_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    store_id,
+                    current_user_id(),
+                    consulta_id,
+                    'mercadopago',
+                    preference_id,
+                    external_reference,
+                    'checkout_criado',
+                    round(amount, 2),
+                    MERCADOPAGO_CURRENCY,
+                    json.dumps(preference, ensure_ascii=False),
+                    now,
+                    now,
+                )
+            )
+
+    return jsonify({
+        'consulta_id': consulta_id,
+        'preference_id': preference.get('id'),
+        'init_point': preference.get('init_point'),
+        'sandbox_init_point': preference.get('sandbox_init_point'),
+    }), 201
+
+
+@crm_bp.route('/api/pagamentos/mercadopago/webhook', methods=['POST'])
+def webhook_mercadopago():
+    body = request.get_json(silent=True) or {}
+    data = body.get('data') or {}
+    event_type = str(body.get('type') or request.args.get('type') or request.args.get('topic') or '').strip().lower()
+    data_id = str(data.get('id') or request.args.get('data.id') or '').strip()
+
+    if not data_id:
+        return jsonify({'ok': True, 'ignored': 'missing_data_id'})
+
+    if not _validate_mercadopago_signature(data_id):
+        return jsonify({'error': 'Assinatura do webhook invalida.'}), 401
+
+    if event_type in ('preapproval', 'subscription_preapproval', 'subscription_authorized_payment'):
+        try:
+            mp_subscription = _mercadopago_request('GET', f'/preapproval/{urllib.parse.quote(data_id)}')
+        except RuntimeError as exc:
+            return jsonify({'error': str(exc)}), 502
+
+        status = str(mp_subscription.get('status') or 'pending').strip().lower()
+        external_reference = str(mp_subscription.get('external_reference') or '').strip()
+        amount = float(((mp_subscription.get('auto_recurring') or {}).get('transaction_amount')) or 0)
+        currency = str(((mp_subscription.get('auto_recurring') or {}).get('currency_id')) or MERCADOPAGO_CURRENCY).strip().upper()
+        owner_user_id = _parse_int((mp_subscription.get('metadata') or {}).get('owner_user_id'))
+        _consulta_id, store_id, ref_owner_user_id, is_license_payment = _extract_ids_from_external_reference(external_reference)
+        owner_user_id = owner_user_id or ref_owner_user_id
+
+        now = now_iso()
+        with get_db() as conn:
+            existing = conn.execute(
+                'SELECT id FROM pagamentos WHERE mp_preference_id = ? LIMIT 1',
+                (str(mp_subscription.get('id') or data_id),)
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    '''
+                    UPDATE pagamentos
+                    SET consulta_id = NULL,
+                        store_id = COALESCE(?, store_id),
+                        owner_user_id = COALESCE(?, owner_user_id),
+                        status = ?, amount = ?, currency = ?, payment_method = ?,
+                        external_reference = ?, raw_json = ?, updated_at = ?, approved_at = COALESCE(?, approved_at)
+                    WHERE id = ?
+                    ''',
+                    (
+                        store_id,
+                        owner_user_id,
+                        status,
+                        round(amount, 2),
+                        currency,
+                        'assinatura',
+                        external_reference,
+                        json.dumps(mp_subscription, ensure_ascii=False),
+                        now,
+                        (str(mp_subscription.get('date_approved') or '').strip() or None),
+                        existing['id'],
+                    )
+                )
+            else:
+                conn.execute(
+                    '''
+                    INSERT INTO pagamentos (
+                        store_id, owner_user_id, consulta_id, gateway, mp_payment_id, mp_preference_id, external_reference,
+                        status, amount, currency, payment_method, raw_json, created_at, updated_at, approved_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        store_id,
+                        owner_user_id,
+                        None,
+                        'mercadopago',
+                        None,
+                        str(mp_subscription.get('id') or data_id),
+                        external_reference,
+                        status,
+                        round(amount, 2),
+                        currency,
+                        'assinatura',
+                        json.dumps(mp_subscription, ensure_ascii=False),
+                        now,
+                        now,
+                        (str(mp_subscription.get('date_approved') or '').strip() or None),
+                    )
+                )
+
+            if is_license_payment:
+                if status in ('authorized', 'active'):
+                    _apply_license_activation(conn, store_id, owner_user_id)
+                elif status in ('cancelled', 'paused'):
+                    _apply_license_deactivation(conn, store_id, owner_user_id)
+
+        return jsonify({'ok': True, 'subscription_id': str(mp_subscription.get('id') or data_id), 'status': status})
+
+    try:
+        mp_payment = _mercadopago_request('GET', f'/v1/payments/{urllib.parse.quote(data_id)}')
+    except RuntimeError as exc:
+        return jsonify({'error': str(exc)}), 502
+
+    metadata = mp_payment.get('metadata') or {}
+    external_reference = str(mp_payment.get('external_reference') or '').strip()
+    consulta_id = _parse_int(metadata.get('consulta_id'))
+    store_id = _parse_int(metadata.get('store_id'))
+    owner_user_id = _parse_int(metadata.get('owner_user_id'))
+    is_license_payment = _is_license_event_from_metadata(metadata)
+
+    if not consulta_id or not store_id:
+        ref_consulta_id, ref_store_id, ref_owner_user_id, ref_is_license = _extract_ids_from_external_reference(external_reference)
+        consulta_id = consulta_id or ref_consulta_id
+        store_id = store_id or ref_store_id
+        owner_user_id = owner_user_id or ref_owner_user_id
+        is_license_payment = is_license_payment or ref_is_license
+
+    status = str(mp_payment.get('status') or 'pending').strip().lower()
+    amount = float(mp_payment.get('transaction_amount') or 0)
+    currency = str(mp_payment.get('currency_id') or MERCADOPAGO_CURRENCY).strip().upper()
+    payment_method = str(mp_payment.get('payment_method_id') or '').strip()
+    paid_at = str(mp_payment.get('date_approved') or '').strip()
+    now = now_iso()
+
+    payment_snapshot = {
+        'gateway': 'mercadopago',
+        'mp_payment_id': str(mp_payment.get('id') or data_id),
+        'status': status,
+        'valor': round(amount, 2),
+        'moeda': currency,
+        'metodo': payment_method,
+        'updated_at': now,
+    }
+
+    with get_db() as conn:
+        existing = conn.execute(
+            'SELECT id FROM pagamentos WHERE mp_payment_id = ? LIMIT 1',
+            (payment_snapshot['mp_payment_id'],)
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                '''
+                UPDATE pagamentos
+                SET consulta_id = COALESCE(?, consulta_id),
+                    store_id = COALESCE(?, store_id),
+                    owner_user_id = COALESCE(?, owner_user_id),
+                    status = ?, amount = ?, currency = ?, payment_method = ?,
+                    external_reference = ?, raw_json = ?, updated_at = ?, approved_at = COALESCE(?, approved_at)
+                WHERE id = ?
+                ''',
+                (
+                    consulta_id,
+                    store_id,
+                    owner_user_id,
+                    status,
+                    round(amount, 2),
+                    currency,
+                    payment_method,
+                    external_reference,
+                    json.dumps(mp_payment, ensure_ascii=False),
+                    now,
+                    paid_at or None,
+                    existing['id'],
+                )
+            )
+        else:
+            conn.execute(
+                '''
+                INSERT INTO pagamentos (
+                    store_id, owner_user_id, consulta_id, gateway, mp_payment_id, external_reference,
+                    status, amount, currency, payment_method, raw_json, created_at, updated_at, approved_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    store_id,
+                    owner_user_id,
+                    consulta_id,
+                    'mercadopago',
+                    payment_snapshot['mp_payment_id'],
+                    external_reference,
+                    status,
+                    round(amount, 2),
+                    currency,
+                    payment_method,
+                    json.dumps(mp_payment, ensure_ascii=False),
+                    now,
+                    now,
+                    paid_at or None,
+                )
+            )
+
+        _upsert_consulta_pagamento(conn, consulta_id, store_id, payment_snapshot)
+        if status == 'approved' and is_license_payment:
+            _apply_license_activation(conn, store_id, owner_user_id)
+
+    return jsonify({'ok': True, 'payment_id': payment_snapshot['mp_payment_id'], 'status': status})
+
+
+@crm_bp.route('/api/pagamentos/mercadopago/consultas/<int:consulta_id>', methods=['GET'])
+@login_required
+def listar_pagamentos_consulta(consulta_id):
+    store_id = current_store_id()
+    with get_db() as conn:
+        rows = conn.execute(
+            '''
+            SELECT * FROM pagamentos
+            WHERE consulta_id = ? AND store_id = ? AND gateway = 'mercadopago'
+            ORDER BY id DESC
+            ''',
+            (consulta_id, store_id)
+        ).fetchall()
+
+    pagamentos = []
+    for row in rows:
+        pagamentos.append({
+            'id': row['id'],
+            'consulta_id': row['consulta_id'],
+            'mp_payment_id': row['mp_payment_id'] or '',
+            'mp_preference_id': row['mp_preference_id'] or '',
+            'status': row['status'] or 'pending',
+            'amount': row['amount'] or 0,
+            'currency': row['currency'] or MERCADOPAGO_CURRENCY,
+            'payment_method': row['payment_method'] or '',
+            'external_reference': row['external_reference'] or '',
+            'approved_at': row['approved_at'] or '',
+            'updated_at': row['updated_at'],
+            'created_at': row['created_at'],
+        })
+
+    return jsonify({'consulta_id': consulta_id, 'pagamentos': pagamentos})
 
 @crm_bp.route('/api/store-state/<scope>', methods=['GET'])
 @login_required
@@ -37,10 +606,14 @@ def obter_store_state(scope):
             'updated_at': '',
         })
 
+    data = state['data']
+    if normalized == 'rooms':
+        data = _sanitize_rooms_store_state(data)
+
     return jsonify({
         'scope': normalized,
         'has_data': True,
-        'data': state['data'],
+        'data': data,
         'updated_at': state['updated_at'],
     })
 
@@ -55,15 +628,23 @@ def salvar_store_state_route(scope):
     if 'data' not in body:
         return jsonify({'error': 'Envie o campo data com o conteudo a salvar.'}), 400
 
+    payload_data = body.get('data')
+    if normalized == 'rooms':
+        payload_data = _sanitize_rooms_store_state(payload_data)
+
     try:
         with get_db() as conn:
-            state = save_store_state(conn, current_store_id(), normalized, body.get('data'))
+            state = save_store_state(conn, current_store_id(), normalized, payload_data)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
+    data = state['data']
+    if normalized == 'rooms':
+        data = _sanitize_rooms_store_state(data)
+
     return jsonify({
         'scope': normalized,
-        'data': state['data'],
+        'data': data,
         'updated_at': state['updated_at'],
     })
 
