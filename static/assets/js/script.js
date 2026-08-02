@@ -2501,9 +2501,15 @@ function _roomIsBasePathMismatch(key, src){
   return Object.values(ROOM_BASE_PATHS).includes(value) && value !== expected;
 }
 
+function _roomCurrentStoreId(){
+  const value=window.FF_CURRENT_USER?.store_id;
+  return value===undefined || value===null || value==='' ? null : String(value);
+}
+
 function _roomReadLegacyStore(){
   try{
-    const storeId=window.FF_CURRENT_USER?.store_id||'0';
+    const storeId=_roomCurrentStoreId();
+    if(!storeId) return {overrides:{},customs:[]};
     const scopedKey=ROOM_CUSTOM_STORE_KEY+'_'+storeId;
     const raw=localStorage.getItem(scopedKey) || null;
     const parsed=raw?JSON.parse(raw):{};
@@ -2517,18 +2523,20 @@ function _roomReadLegacyStore(){
 }
 
 function _roomMigrationFlagKey(){
-  const storeId=window.FF_CURRENT_USER?.store_id||'0';
-  return 'ff_store_state_room_migrated_'+storeId;
+  const storeId=_roomCurrentStoreId();
+  return storeId ? 'ff_store_state_room_migrated_'+storeId : null;
 }
 
 // Cache localStorage para evitar re-fetch do Supabase a cada carregamento (reduz egress)
 function _roomCacheKey(){
-  const storeId=window.FF_CURRENT_USER?.store_id||'0';
-  return 'ff_rooms_cache_v2_'+storeId;
+  const storeId=_roomCurrentStoreId();
+  return storeId ? 'ff_rooms_cache_v3_'+storeId : null;
 }
 function _roomReadCache(){
   try{
-    const raw=localStorage.getItem(_roomCacheKey());
+    const cacheKey=_roomCacheKey();
+    if(!cacheKey) return null;
+    const raw=localStorage.getItem(cacheKey);
     if(!raw) return null;
     const parsed=JSON.parse(raw);
     if(!parsed||!parsed.updated_at) return null;
@@ -2536,12 +2544,17 @@ function _roomReadCache(){
   }catch(_){ return null; }
 }
 function _roomWriteCache(data, updated_at){
-  try{ localStorage.setItem(_roomCacheKey(), JSON.stringify({data, updated_at})); }catch(_){}
+  try{
+    const cacheKey=_roomCacheKey();
+    if(!cacheKey) return;
+    localStorage.setItem(cacheKey, JSON.stringify({data, updated_at}));
+  }catch(_){}
 }
 
 function _roomWriteLegacyStore(data){
   try{
-    const storeId=window.FF_CURRENT_USER?.store_id||'0';
+    const storeId=_roomCurrentStoreId();
+    if(!storeId) return;
     localStorage.setItem(ROOM_CUSTOM_STORE_KEY+'_'+storeId, JSON.stringify(data));
   }catch(_){ }
 }
@@ -2602,7 +2615,7 @@ async function _roomSyncToServer(){
       });
       // Atualiza cache local com o updated_at retornado pelo servidor
       if(resp && resp.updated_at) _roomWriteCache(payload, resp.updated_at);
-      try{ localStorage.setItem(_roomMigrationFlagKey(), '1'); }catch(_){ }
+      try{ const flagKey=_roomMigrationFlagKey(); if(flagKey) localStorage.setItem(flagKey, '1'); }catch(_){ }
     }catch(err){
       toast(err.message||'Nao foi possivel sincronizar os ambientes da loja.');
     }finally{
@@ -2640,7 +2653,7 @@ async function _roomEnsureStoreLoaded(){
         _roomStoreData=legacy;
         if(_roomHasMeaningfulData(legacy)){
           _roomStoreLoaded=true;
-          try{ localStorage.setItem(_roomMigrationFlagKey(), '1'); }catch(_){ }
+          try{ const flagKey=_roomMigrationFlagKey(); if(flagKey) localStorage.setItem(flagKey, '1'); }catch(_){ }
           _roomScheduleSync(0);
           return _roomStoreData;
         }
