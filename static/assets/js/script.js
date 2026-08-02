@@ -8228,6 +8228,14 @@ function _supportProtocol(ticketId) {
   return 'SUP-' + String(id).padStart(6, '0');
 }
 
+function _supportCanDeleteTicket(ticket) {
+  const currentUser = window.FF_CURRENT_USER || {};
+  if (String(currentUser.role || '').toLowerCase() === 'admin') return true;
+  const ticketUserId = Number(ticket?.user_id || 0);
+  const currentUserId = Number(currentUser.id || 0);
+  return !!ticketUserId && !!currentUserId && ticketUserId === currentUserId;
+}
+
 function _supportRenderDetalhe(ticket, messages) {
   const detail = document.getElementById('supportDetail');
   const protocolEl = document.getElementById('supportCurrentProtocol');
@@ -8248,6 +8256,9 @@ function _supportRenderDetalhe(ticket, messages) {
       _supportStatusBadge(ticket.status) +
       _supportSeverityBadge(ticket.severity) +
       '<span style="font-size:11px;color:var(--gray)">Categoria: ' + _esc(ticket.category || 'geral') + '</span>' +
+      (_supportCanDeleteTicket(ticket)
+        ? '<button class="btn dark" style="margin-left:auto;padding:6px 10px;font-size:11px;background:#8A1F1F;border-color:#8A1F1F" onclick="supportExcluirChamado(' + Number(ticket.id || 0) + ')">Excluir</button>'
+        : '') +
     '</div>' +
     '<div style="font-size:12px;color:var(--brown);margin-bottom:8px"><strong>Assunto:</strong> ' + _esc(ticket.subject || '-') + '</div>' +
     '<div style="font-size:12px;color:var(--gray);margin-bottom:10px;padding:8px;border:1px solid var(--border2);border-radius:6px;background:var(--cream2)"><strong>Triagem IA:</strong> ' + _esc(ticket.ai_summary || 'Sem resumo automático.') + '</div>';
@@ -8284,6 +8295,7 @@ function _supportRenderTabela(tickets) {
   }
 
   body.innerHTML = list.map(t => {
+    const canDelete = _supportCanDeleteTicket(t);
     return '<tr style="border-bottom:1px solid var(--border2)">' +
       '<td style="padding:10px 6px;font-family:monospace;color:var(--brown)">' + _esc(_supportProtocol(t.id)) + '</td>' +
       '<td style="padding:10px 6px;color:var(--brown)">' + _esc(t.subject || '-') + '</td>' +
@@ -8292,6 +8304,7 @@ function _supportRenderTabela(tickets) {
       '<td style="padding:10px 6px;text-align:center;color:var(--gray)">' + _esc(_fmtDataHora(t.updated_at)) + '</td>' +
       '<td style="padding:10px 6px;text-align:right">' +
         '<button class="btn dark" style="padding:6px 10px;font-size:11px" onclick="supportAbrirChamado(' + t.id + ')">Ver</button>' +
+        (canDelete ? '<button class="btn dark" style="margin-left:6px;padding:6px 10px;font-size:11px;background:#8A1F1F;border-color:#8A1F1F" onclick="supportExcluirChamado(' + t.id + ')">Excluir</button>' : '') +
       '</td>' +
     '</tr>';
   }).join('');
@@ -8461,6 +8474,36 @@ async function supportEncerrarChamado() {
     _supportSetStatus('Chamado encerrado com sucesso.');
   } catch (err) {
     _supportSetStatus(err.message || 'Erro ao encerrar chamado.', true);
+  }
+}
+
+async function supportExcluirChamado(ticketId) {
+  const id = Number(ticketId || _supportTicketAtualId) || 0;
+  if (!id) {
+    _supportSetStatus('Selecione um chamado antes de excluir.', true);
+    return;
+  }
+
+  const ticket = _supportTicketsById[id] || null;
+  if (!_supportCanDeleteTicket(ticket)) {
+    _supportSetStatus('Você não tem permissão para excluir este chamado.', true);
+    return;
+  }
+
+  const ok = window.confirm('Excluir o chamado ' + _supportProtocol(id) + '?\n\nEssa ação remove a solicitação e todas as mensagens.');
+  if (!ok) return;
+
+  _supportSetStatus('Excluindo chamado...');
+  try {
+    await _ffApi('/api/support/tickets/' + id, { method: 'DELETE' });
+    _supportTicketAtualId = null;
+    await supportCarregarChamados();
+    _supportRenderDetalhe(null, []);
+    const reply = document.getElementById('supportReply');
+    if (reply) reply.value = '';
+    _supportSetStatus('Chamado excluído com sucesso.');
+  } catch (err) {
+    _supportSetStatus(err.message || 'Erro ao excluir chamado.', true);
   }
 }
 

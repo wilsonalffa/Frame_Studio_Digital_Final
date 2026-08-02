@@ -2,9 +2,11 @@ import json
 import os
 import re
 import unicodedata
+import smtplib
+from email.message import EmailMessage
 import urllib.error
 import urllib.request
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from core.auth import login_required, get_authenticated_user
 from core.db import get_db, inserted_id
 from core.utils import now_iso
@@ -13,6 +15,18 @@ support_bp = Blueprint('support', __name__)
 
 GEMINI_API_KEY = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
 GEMINI_MODEL = (os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash') or 'gemini-2.5-flash').replace('models/', '')
+SUPPORT_NOTIFY_EMAILS = [
+    addr.strip()
+    for addr in re.split(r'[;,]+', os.environ.get('SUPPORT_NOTIFY_EMAILS', ''))
+    if addr.strip()
+]
+SUPPORT_SMTP_HOST = (os.environ.get('SUPPORT_SMTP_HOST') or '').strip()
+SUPPORT_SMTP_PORT = int(os.environ.get('SUPPORT_SMTP_PORT') or '587')
+SUPPORT_SMTP_USERNAME = (os.environ.get('SUPPORT_SMTP_USERNAME') or '').strip()
+SUPPORT_SMTP_PASSWORD = (os.environ.get('SUPPORT_SMTP_PASSWORD') or '').strip()
+SUPPORT_SMTP_FROM = (os.environ.get('SUPPORT_SMTP_FROM') or SUPPORT_SMTP_USERNAME or '').strip()
+SUPPORT_SMTP_USE_SSL = str(os.environ.get('SUPPORT_SMTP_USE_SSL') or '').strip().lower() in ('1', 'true', 'yes', 'sim', 'on')
+SUPPORT_SMTP_USE_STARTTLS = str(os.environ.get('SUPPORT_SMTP_USE_STARTTLS') or '1').strip().lower() in ('1', 'true', 'yes', 'sim', 'on')
 
 
 def _norm_category(value):
@@ -511,6 +525,56 @@ def _row_to_message(row):
     }
 
 
+def _notify_support_ticket_created(ticket, user, message_text):
+    if not SUPPORT_NOTIFY_EMAILS or not SUPPORT_SMTP_HOST:
+        current_app.logger.info('Notificacao de suporte nao enviada: SMTP ou destinatarios nao configurados.')
+        return False
+
+    subject = f"[Suporte] { _support_protocol(ticket['id']) } - {ticket.get('subject') or 'Novo chamado'}"
+    body_lines = [
+        'Novo chamado foi aberto no Frame Studio Digital.',
+        '',
+        f"Protocolo: {_support_protocol(ticket['id'])}",
+        f"Unidade: {user.get('store_name') or user.get('store_id') or '-'}",
+        f"Usuario: {user.get('display_name') or user.get('username') or '-'}",
+        f"Categoria: {ticket.get('category') or 'geral'}",
+        f"Severidade: {ticket.get('severity') or 'media'}",
+        f"Status: {ticket.get('status') or 'aberto'}",
+        f"Assunto: {ticket.get('subject') or '-'}",
+        '',
+        'Mensagem:',
+        message_text or '-',
+        '',
+        f"Resumo IA: {ticket.get('ai_summary') or '-'}",
+    ]
+
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = SUPPORT_SMTP_FROM or SUPPORT_SMTP_USERNAME or 'noreply@localhost'
+    msg['To'] = ', '.join(SUPPORT_NOTIFY_EMAILS)
+    msg.set_content('\n'.join(body_lines))
+
+    try:
+        if SUPPORT_SMTP_USE_SSL:
+          server = smtplib.SMTP_SSL(SUPPORT_SMTP_HOST, SUPPORT_SMTP_PORT, timeout=20)
+        else:
+          server = smtplib.SMTP(SUPPORT_SMTP_HOST, SUPPORT_SMTP_PORT, timeout=20)
+        with server as smtp:
+            if SUPPORT_SMTP_USE_STARTTLS and not SUPPORT_SMTP_USE_SSL:
+                smtp.starttls()
+            if SUPPORT_SMTP_USERNAME:
+                smtp.login(SUPPORT_SMTP_USERNAME, SUPPORT_SMTP_PASSWORD)
+            smtp.send_message(msg)
+        return True
+    except Exception as exc:
+        current_app.logger.warning('Falha ao enviar e-mail de suporte: %s', exc)
+        return False
+
+
+def _support_protocol(ticket_id):
+    return f'SUP-{int(ticket_id or 0):06d}'
+
+
 @support_bp.route('/api/support/tickets', methods=['GET'])
 @login_required
 def support_listar_chamados():
@@ -622,6 +686,7 @@ def support_criar_chamado():
         ).fetchone()
 
     ticket = _row_to_ticket(row)
+    _notify_support_ticket_created(ticket, user, message)
     return jsonify({'ticket': ticket, 'protocol': f'SUP-{ticket_id:06d}'}), 201
 
 
@@ -793,6 +858,32 @@ def support_encerrar_chamado(ticket_id):
     return jsonify({'ok': True, 'ticket_id': ticket_id})
 
 
+@support_bp.route('/api/support/tickets/<int:ticket_id>', methods=['DELETE'])
+@login_required
+def support_excluir_chamado(ticket_id):
+    user = get_authenticated_user()
+    if not user or not user.get('store_id'):
+        return jsonify({'error': 'Sessao invalida para suporte.'}), 401
+
+    is_admin = str(user.get('role') or '').lower() == 'admin'
+    now = now_iso()
+
+    with get_db() as conn:
+        ticket = conn.execute(
+            'SELECT * FROM support_tickets WHERE id = ? AND store_id = ?',
+            (ticket_id, user['store_id'])
+        ).fetchone()
+        if not ticket:
+            return jsonify({'error': 'Chamado nao encontrado.'}), 404
+        if not is_admin and int(ticket['user_id'] or 0) != int(user['id'] or 0):
+            return jsonify({'error': 'Você só pode excluir os seus próprios chamados.'}), 403
+
+        conn.execute('DELETE FROM support_messages WHERE ticket_id = ? AND store_id = ?', (ticket_id, user['store_id']))
+        conn.execute('DELETE FROM support_tickets WHERE id = ? AND store_id = ?', (ticket_id, user['store_id']))
+
+    return jsonify({'ok': True, 'ticket_id': ticket_id, 'deleted_at': now})
+
+
 @support_bp.route('/api/support/self-service', methods=['POST'])
 @login_required
 def support_autoatendimento():
@@ -901,6 +992,18 @@ def support_autoatendimento():
                 'subject': subject,
                 'status': 'aberto',
             }
+            _notify_support_ticket_created(
+                {
+                    'id': ticket_id,
+                    'subject': subject,
+                    'category': category,
+                    'severity': severity,
+                    'status': 'aberto',
+                    'ai_summary': ai_summary,
+                },
+                user,
+                f'Duvida via autoatendimento: {question}',
+            )
 
     return jsonify({
         'answer': answer,
