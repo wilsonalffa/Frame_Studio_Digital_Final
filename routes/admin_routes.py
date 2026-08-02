@@ -82,6 +82,7 @@ def criar_loja():
         store_id = inserted_id(conn, cur_store)
 
         save_store_state(conn, store_id, 'catalog', default_store_state('catalog'))
+        save_store_state(conn, store_id, 'rooms', default_store_state('rooms'))
 
         cur = conn.execute(
             '''

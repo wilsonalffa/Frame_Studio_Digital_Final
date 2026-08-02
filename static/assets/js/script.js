@@ -2491,9 +2491,21 @@ function _roomIsUsableSrc(src){
   return v.startsWith('data:image/') || v.startsWith('/static/') || /^https?:\/\//i.test(v) || v.startsWith('blob:');
 }
 
+function _roomIsBasePathMismatch(key, src){
+  if(typeof src!=='string') return false;
+  const expected=ROOM_BASE_PATHS[key];
+  if(!expected) return false;
+  const value=src.trim();
+  if(!value || value===expected) return false;
+  if(!value.startsWith('/static/assets/img/rooms/')) return false;
+  return Object.values(ROOM_BASE_PATHS).includes(value) && value !== expected;
+}
+
 function _roomReadLegacyStore(){
   try{
-    const raw=localStorage.getItem(ROOM_CUSTOM_STORE_KEY);
+    const storeId=window.FF_CURRENT_USER?.store_id||'0';
+    const scopedKey=ROOM_CUSTOM_STORE_KEY+'_'+storeId;
+    const raw=localStorage.getItem(scopedKey) || null;
     const parsed=raw?JSON.parse(raw):{};
     return {
       overrides: parsed.overrides||{},
@@ -2527,16 +2539,23 @@ function _roomWriteCache(data, updated_at){
   try{ localStorage.setItem(_roomCacheKey(), JSON.stringify({data, updated_at})); }catch(_){}
 }
 
+function _roomWriteLegacyStore(data){
+  try{
+    const storeId=window.FF_CURRENT_USER?.store_id||'0';
+    localStorage.setItem(ROOM_CUSTOM_STORE_KEY+'_'+storeId, JSON.stringify(data));
+  }catch(_){ }
+}
+
 function _roomNormalizeStore(data){
   const safe = data && typeof data === 'object' ? data : {};
   const rawOverrides = safe.overrides && typeof safe.overrides === 'object' ? safe.overrides : {};
   const overrides = {};
   Object.keys(rawOverrides).forEach((key)=>{
     const value = rawOverrides[key];
-    if(_roomIsUsableSrc(value)) overrides[key] = String(value).trim();
+    if(_roomIsUsableSrc(value) && !_roomIsBasePathMismatch(key, value)) overrides[key] = String(value).trim();
   });
   const customs = Array.isArray(safe.customs)
-    ? safe.customs.filter(c => c && c.key && _roomIsUsableSrc(c.src)).map(c => ({
+    ? safe.customs.filter(c => c && c.key && _roomIsUsableSrc(c.src) && !_roomIsBasePathMismatch(c.key, c.src)).map(c => ({
         ...c,
         src: String(c.src).trim(),
       }))
@@ -2550,6 +2569,7 @@ function _roomLoadStore(){
 
 function _roomSaveStore(data){
   _roomStoreData=_roomNormalizeStore(data);
+  _roomWriteLegacyStore(_roomStoreData);
   _roomScheduleSync();
   return true;
 }
@@ -2624,6 +2644,7 @@ async function _roomEnsureStoreLoaded(){
           _roomScheduleSync(0);
           return _roomStoreData;
         }
+        _roomScheduleSync(0);
       }
     }catch(_err){
       _roomStoreData=_roomNormalizeStore(_roomReadLegacyStore());

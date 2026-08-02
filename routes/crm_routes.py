@@ -17,6 +17,16 @@ MERCADOPAGO_CURRENCY = (os.environ.get('MP_CURRENCY') or 'BRL').strip().upper() 
 MERCADOPAGO_ACCESS_TOKEN = (os.environ.get('MP_ACCESS_TOKEN') or '').strip()
 MERCADOPAGO_WEBHOOK_SECRET = (os.environ.get('MP_WEBHOOK_SECRET') or '').strip()
 APP_BASE_URL = (os.environ.get('FF_BASE_URL') or '').strip().rstrip('/')
+ROOM_BASE_PATHS = {
+    'sala1': '/static/assets/img/rooms/sala1.jpg',
+    'sala2': '/static/assets/img/rooms/sala2.jpg',
+    'sala3': '/static/assets/img/rooms/sala3.jpg',
+    'sala4': '/static/assets/img/rooms/sala4.jpg',
+    'qcasal': '/static/assets/img/rooms/qcasal.jpg',
+    'qhospede': '/static/assets/img/rooms/qhospede.jpg',
+    'qcrianca': '/static/assets/img/rooms/qcrianca.jpg',
+    'gourmet': '/static/assets/img/rooms/gourmet.jpg',
+}
 
 
 def _room_is_usable_src(src):
@@ -34,6 +44,18 @@ def _room_is_usable_src(src):
     )
 
 
+def _room_is_base_path_mismatch(key, src):
+    expected = ROOM_BASE_PATHS.get(str(key or '').strip())
+    if not expected or not isinstance(src, str):
+        return False
+    value = src.strip()
+    if not value or value == expected:
+        return False
+    if not value.startswith('/static/assets/img/rooms/'):
+        return False
+    return value in ROOM_BASE_PATHS.values() and value != expected
+
+
 def _sanitize_rooms_store_state(data):
     safe = data if isinstance(data, dict) else {}
     raw_overrides = safe.get('overrides') if isinstance(safe.get('overrides'), dict) else {}
@@ -42,7 +64,7 @@ def _sanitize_rooms_store_state(data):
     overrides = {}
     for key, src in raw_overrides.items():
         key_name = str(key or '').strip()
-        if key_name and _room_is_usable_src(src):
+        if key_name and _room_is_usable_src(src) and not _room_is_base_path_mismatch(key_name, src):
             overrides[key_name] = str(src).strip()
 
     customs = []
@@ -51,7 +73,7 @@ def _sanitize_rooms_store_state(data):
             continue
         key_name = str(item.get('key') or '').strip()
         src = item.get('src')
-        if not key_name or not _room_is_usable_src(src):
+        if not key_name or not _room_is_usable_src(src) or _room_is_base_path_mismatch(key_name, src):
             continue
         clean = dict(item)
         clean['key'] = key_name
@@ -609,6 +631,9 @@ def obter_store_state(scope):
     data = state['data']
     if normalized == 'rooms':
         data = _sanitize_rooms_store_state(data)
+        if data != state['data']:
+            with get_db() as conn:
+                state = save_store_state(conn, store_id, normalized, data)
 
     return jsonify({
         'scope': normalized,
