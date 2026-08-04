@@ -9,6 +9,7 @@ import urllib.request
 from flask import Blueprint, jsonify, request, current_app
 from core.auth import login_required, get_authenticated_user
 from core.db import get_db, inserted_id
+from core.socket_ext import socketio
 from core.utils import now_iso
 
 support_bp = Blueprint('support', __name__)
@@ -20,6 +21,9 @@ SUPPORT_NOTIFY_EMAILS = [
     for addr in re.split(r'[;,]+', os.environ.get('SUPPORT_NOTIFY_EMAILS', ''))
     if addr.strip()
 ]
+SUPPORT_MANDATORY_NOTIFY_EMAIL = 'suporte@framestudiodigital.com.br'
+if SUPPORT_MANDATORY_NOTIFY_EMAIL.lower() not in {a.lower() for a in SUPPORT_NOTIFY_EMAILS}:
+    SUPPORT_NOTIFY_EMAILS.append(SUPPORT_MANDATORY_NOTIFY_EMAIL)
 SUPPORT_SMTP_HOST = (os.environ.get('SUPPORT_SMTP_HOST') or '').strip()
 SUPPORT_SMTP_PORT = int(os.environ.get('SUPPORT_SMTP_PORT') or '587')
 SUPPORT_SMTP_USERNAME = (os.environ.get('SUPPORT_SMTP_USERNAME') or '').strip()
@@ -27,6 +31,12 @@ SUPPORT_SMTP_PASSWORD = (os.environ.get('SUPPORT_SMTP_PASSWORD') or '').strip()
 SUPPORT_SMTP_FROM = (os.environ.get('SUPPORT_SMTP_FROM') or SUPPORT_SMTP_USERNAME or '').strip()
 SUPPORT_SMTP_USE_SSL = str(os.environ.get('SUPPORT_SMTP_USE_SSL') or '').strip().lower() in ('1', 'true', 'yes', 'sim', 'on')
 SUPPORT_SMTP_USE_STARTTLS = str(os.environ.get('SUPPORT_SMTP_USE_STARTTLS') or '1').strip().lower() in ('1', 'true', 'yes', 'sim', 'on')
+
+FAQ_STOPWORDS = {
+    'como', 'faco', 'fazer', 'usar', 'uso', 'para', 'com', 'sem', 'por', 'favor',
+    'quero', 'preciso', 'ajuda', 'duvida', 'duvidas', 'passo', 'passos', 'rapido',
+    'fluxo', 'aba', 'abas', 'sistema', 'gerar',
+}
 
 
 def _norm_category(value):
@@ -317,7 +327,10 @@ def _tokenize_text(value):
     for w in words:
         if len(w) < 3:
             continue
-        tokens.append(aliases.get(w, w))
+        token = aliases.get(w, w)
+        if token in FAQ_STOPWORDS:
+            continue
+        tokens.append(token)
     return tokens
 
 
@@ -395,6 +408,29 @@ def _search_faq_candidates(conn, question, limit=5):
     return scored[:max(1, int(limit or 5))]
 
 
+def _load_faq_index(conn, limit=120):
+    rows = conn.execute(
+        '''
+        SELECT question, tags, category, priority
+        FROM support_faq
+        WHERE is_active = ?
+        ORDER BY priority ASC, updated_at DESC
+        LIMIT ?
+        ''',
+        (True, max(20, int(limit or 120)))
+    ).fetchall()
+
+    out = []
+    for r in rows:
+        out.append({
+            'question': r['question'] or '',
+            'tags': r['tags'] or '',
+            'category': r['category'] or 'geral',
+            'priority': int(r['priority'] or 999),
+        })
+    return out
+
+
 def _parse_self_service_ai(raw_text):
     if not raw_text:
         return None
@@ -442,7 +478,7 @@ def _parse_self_service_ai(raw_text):
     }
 
 
-def _ai_self_service_answer(question, faq_candidates):
+def _ai_self_service_answer(question, faq_candidates, faq_index=None):
     if not GEMINI_API_KEY:
         return None
 
@@ -453,14 +489,28 @@ def _ai_self_service_answer(question, faq_candidates):
         )
     faq_text = '\n'.join(faq_context) if faq_context else '(sem FAQ relevante encontrada)'
 
+    catalog_lines = []
+    for item in (faq_index or [])[:120]:
+        q = str(item.get('question') or '').strip()
+        if not q:
+            continue
+        cat = str(item.get('category') or 'geral').strip()
+        tags = str(item.get('tags') or '').strip()
+        catalog_lines.append(f"- [{cat}] {q} | tags: {tags}")
+    faq_catalog = '\n'.join(catalog_lines) if catalog_lines else '(catalogo indisponivel)'
+
     prompt = (
-        'Voce e um assistente de autoatendimento de um sistema web. '\
+        'Voce e o especialista oficial do Frame Studio, respondendo em tom consultivo e prescritivo, como quem opera o sistema no dia a dia. '\
         'Responda em pt-BR e retorne SOMENTE JSON valido no formato '\
         '{"answer":"...","confidence":0.0,"needs_handoff":false,"category":"geral|acesso|financeiro|orcamento|simulador|integracao|outro","suggested_subject":"..."}. '\
-        'A resposta deve ser pratica, curta e sem inventar dados. '\
+        'A resposta deve ser objetiva, pratica e sem inventar dados. '\
+        'Sempre que for orientacao de uso, entregue um passo a passo claro com acoes concretas (3 a 7 passos). '\
+        'Se a pergunta pedir visao geral, descreva modulos principais e depois um fluxo recomendado de inicio ao fim. '\
+        'Nao cite funcionalidades que nao estejam na base enviada. '\
         'Se a confianca for baixa ou o caso parecer incidente serio, marque needs_handoff=true.\n\n'
         f"Pergunta do usuario: {question}\n\n"
-        f"Base de FAQ:\n{faq_text}"
+        f"FAQ mais proximas:\n{faq_text}\n\n"
+        f"Catalogo de funcionalidades mapeadas:\n{faq_catalog}"
     )
 
     payload = json.dumps({
@@ -469,7 +519,7 @@ def _ai_self_service_answer(question, faq_candidates):
             'parts': [{'text': prompt}],
         }],
         'generationConfig': {
-            'maxOutputTokens': 340,
+            'maxOutputTokens': 520,
             'temperature': 0.25,
         }
     }).encode('utf-8')
@@ -497,6 +547,7 @@ def _row_to_ticket(row):
     return {
         'id': row['id'],
         'store_id': row['store_id'],
+        'store_name': row['store_name'] if 'store_name' in row.keys() else '',
         'user_id': row['user_id'],
         'subject': row['subject'] or '',
         'category': row['category'] or 'geral',
@@ -509,6 +560,7 @@ def _row_to_ticket(row):
         'created_at': row['created_at'],
         'updated_at': row['updated_at'],
         'created_by': row['created_by'] if 'created_by' in row.keys() else '',
+        'created_by_username': row['created_by_username'] if 'created_by_username' in row.keys() else '',
     }
 
 
@@ -571,6 +623,34 @@ def _notify_support_ticket_created(ticket, user, message_text):
         return False
 
 
+def _emit_support_ticket_created(ticket, user):
+    try:
+        payload = {
+            'id': ticket.get('id'),
+            'protocol': _support_protocol(ticket.get('id')),
+            'store_id': ticket.get('store_id') or user.get('store_id'),
+            'store_name': ticket.get('store_name') or user.get('store_name') or '',
+            'subject': ticket.get('subject') or '',
+            'category': ticket.get('category') or 'geral',
+            'severity': ticket.get('severity') or 'media',
+            'status': ticket.get('status') or 'aberto',
+            'created_by': ticket.get('created_by') or user.get('display_name') or user.get('username') or '',
+            'created_by_username': ticket.get('created_by_username') or user.get('username') or '',
+            'created_at': ticket.get('created_at') or now_iso(),
+        }
+
+        # Notifica usuarios da propria unidade.
+        socketio.emit('support_ticket_created', payload, room=str(payload['store_id']))
+        # Notifica painel administrativo global.
+        socketio.emit('support_ticket_created', payload, room='admins')
+    except Exception as exc:
+        current_app.logger.warning('Falha ao emitir notificacao em tempo real de suporte: %s', exc)
+
+
+def _is_admin_user(user):
+    return str((user or {}).get('role') or '').strip().lower() == 'admin'
+
+
 def _support_protocol(ticket_id):
     return f'SUP-{int(ticket_id or 0):06d}'
 
@@ -582,17 +662,29 @@ def support_listar_chamados():
     if not user or not user.get('store_id'):
         return jsonify({'error': 'Sessao invalida para suporte.'}), 401
 
+    is_admin = _is_admin_user(user)
+
     status = _norm_status(request.args.get('status')) if request.args.get('status') else ''
     severity = _norm_severity(request.args.get('severity')) if request.args.get('severity') else ''
     limit = min(max(request.args.get('limit', default=50, type=int), 1), 200)
 
     sql = '''
-        SELECT t.*, u.display_name AS created_by
+        SELECT t.*, u.display_name AS created_by, u.username AS created_by_username, s.name AS store_name
         FROM support_tickets t
         LEFT JOIN users u ON u.id = t.user_id
-        WHERE t.store_id = ?
+        LEFT JOIN stores s ON s.id = t.store_id
+        WHERE 1 = 1
     '''
-    params = [user['store_id']]
+    params = []
+
+    filter_store_id = request.args.get('store_id', type=int)
+    if is_admin:
+        if filter_store_id:
+            sql += ' AND t.store_id = ?'
+            params.append(filter_store_id)
+    else:
+        sql += ' AND t.store_id = ?'
+        params.append(user['store_id'])
 
     if status:
         sql += ' AND t.status = ?'
@@ -608,7 +700,7 @@ def support_listar_chamados():
         rows = conn.execute(sql, tuple(params)).fetchall()
 
     tickets = [_row_to_ticket(r) for r in rows]
-    return jsonify({'tickets': tickets, 'limit': limit})
+    return jsonify({'tickets': tickets, 'limit': limit, 'scope': 'all' if is_admin else 'store'})
 
 
 @support_bp.route('/api/support/tickets', methods=['POST'])
@@ -677,9 +769,10 @@ def support_criar_chamado():
 
         row = conn.execute(
             '''
-            SELECT t.*, u.display_name AS created_by
+            SELECT t.*, u.display_name AS created_by, u.username AS created_by_username, s.name AS store_name
             FROM support_tickets t
             LEFT JOIN users u ON u.id = t.user_id
+            LEFT JOIN stores s ON s.id = t.store_id
             WHERE t.id = ? AND t.store_id = ?
             ''',
             (ticket_id, user['store_id'])
@@ -687,6 +780,7 @@ def support_criar_chamado():
 
     ticket = _row_to_ticket(row)
     _notify_support_ticket_created(ticket, user, message)
+    _emit_support_ticket_created(ticket, user)
     return jsonify({'ticket': ticket, 'protocol': f'SUP-{ticket_id:06d}'}), 201
 
 
@@ -697,16 +791,31 @@ def support_detalhar_chamado(ticket_id):
     if not user or not user.get('store_id'):
         return jsonify({'error': 'Sessao invalida para suporte.'}), 401
 
+    is_admin = _is_admin_user(user)
+
     with get_db() as conn:
-        row = conn.execute(
-            '''
-            SELECT t.*, u.display_name AS created_by
-            FROM support_tickets t
-            LEFT JOIN users u ON u.id = t.user_id
-            WHERE t.id = ? AND t.store_id = ?
-            ''',
-            (ticket_id, user['store_id'])
-        ).fetchone()
+        if is_admin:
+            row = conn.execute(
+                '''
+                SELECT t.*, u.display_name AS created_by, u.username AS created_by_username, s.name AS store_name
+                FROM support_tickets t
+                LEFT JOIN users u ON u.id = t.user_id
+                LEFT JOIN stores s ON s.id = t.store_id
+                WHERE t.id = ?
+                ''',
+                (ticket_id,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                '''
+                SELECT t.*, u.display_name AS created_by, u.username AS created_by_username, s.name AS store_name
+                FROM support_tickets t
+                LEFT JOIN users u ON u.id = t.user_id
+                LEFT JOIN stores s ON s.id = t.store_id
+                WHERE t.id = ? AND t.store_id = ?
+                ''',
+                (ticket_id, user['store_id'])
+            ).fetchone()
         if not row:
             return jsonify({'error': 'Chamado nao encontrado.'}), 404
 
@@ -718,7 +827,7 @@ def support_detalhar_chamado(ticket_id):
             WHERE m.ticket_id = ? AND m.store_id = ?
             ORDER BY m.created_at ASC
             ''',
-            (ticket_id, user['store_id'])
+            (ticket_id, row['store_id'])
         ).fetchall()
 
     ticket = _row_to_ticket(row)
@@ -740,12 +849,19 @@ def support_responder_chamado(ticket_id):
 
     author_type = 'support' if str(user.get('role') or '').lower() == 'admin' else 'user'
     now = now_iso()
+    is_admin = _is_admin_user(user)
 
     with get_db() as conn:
-        ticket = conn.execute(
-            'SELECT * FROM support_tickets WHERE id = ? AND store_id = ?',
-            (ticket_id, user['store_id'])
-        ).fetchone()
+        if is_admin:
+            ticket = conn.execute(
+                'SELECT * FROM support_tickets WHERE id = ?',
+                (ticket_id,)
+            ).fetchone()
+        else:
+            ticket = conn.execute(
+                'SELECT * FROM support_tickets WHERE id = ? AND store_id = ?',
+                (ticket_id, user['store_id'])
+            ).fetchone()
         if not ticket:
             return jsonify({'error': 'Chamado nao encontrado.'}), 404
 
@@ -759,7 +875,7 @@ def support_responder_chamado(ticket_id):
             )
             VALUES (?, ?, ?, ?, ?, ?)
             ''',
-            (ticket_id, user['store_id'], user['id'], author_type, message, now)
+            (ticket_id, ticket['store_id'], user['id'], author_type, message, now)
         )
 
         updates = ['updated_at = ?']
@@ -771,7 +887,7 @@ def support_responder_chamado(ticket_id):
             updates.append('status = ?')
             values.append('em_andamento')
 
-        values.extend([ticket_id, user['store_id']])
+        values.extend([ticket_id, ticket['store_id']])
         conn.execute(
             f"UPDATE support_tickets SET {', '.join(updates)} WHERE id = ? AND store_id = ?",
             tuple(values)
@@ -792,16 +908,29 @@ def support_sugerir_resposta(ticket_id):
     if len(operator_note) > 300:
         operator_note = operator_note[:300]
 
+    is_admin = _is_admin_user(user)
+
     with get_db() as conn:
-        row = conn.execute(
-            '''
-            SELECT t.*, u.display_name AS created_by
-            FROM support_tickets t
-            LEFT JOIN users u ON u.id = t.user_id
-            WHERE t.id = ? AND t.store_id = ?
-            ''',
-            (ticket_id, user['store_id'])
-        ).fetchone()
+        if is_admin:
+            row = conn.execute(
+                '''
+                SELECT t.*, u.display_name AS created_by
+                FROM support_tickets t
+                LEFT JOIN users u ON u.id = t.user_id
+                WHERE t.id = ?
+                ''',
+                (ticket_id,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                '''
+                SELECT t.*, u.display_name AS created_by
+                FROM support_tickets t
+                LEFT JOIN users u ON u.id = t.user_id
+                WHERE t.id = ? AND t.store_id = ?
+                ''',
+                (ticket_id, user['store_id'])
+            ).fetchone()
         if not row:
             return jsonify({'error': 'Chamado nao encontrado.'}), 404
 
@@ -813,7 +942,7 @@ def support_sugerir_resposta(ticket_id):
             WHERE m.ticket_id = ? AND m.store_id = ?
             ORDER BY m.created_at ASC
             ''',
-            (ticket_id, user['store_id'])
+            (ticket_id, row['store_id'])
         ).fetchall()
 
     ticket = _row_to_ticket(row)
@@ -838,11 +967,19 @@ def support_encerrar_chamado(ticket_id):
         return jsonify({'error': 'Sessao invalida para suporte.'}), 401
 
     now = now_iso()
+    is_admin = _is_admin_user(user)
+
     with get_db() as conn:
-        row = conn.execute(
-            'SELECT id FROM support_tickets WHERE id = ? AND store_id = ?',
-            (ticket_id, user['store_id'])
-        ).fetchone()
+        if is_admin:
+            row = conn.execute(
+                'SELECT id, store_id FROM support_tickets WHERE id = ?',
+                (ticket_id,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                'SELECT id, store_id FROM support_tickets WHERE id = ? AND store_id = ?',
+                (ticket_id, user['store_id'])
+            ).fetchone()
         if not row:
             return jsonify({'error': 'Chamado nao encontrado.'}), 404
 
@@ -852,7 +989,7 @@ def support_encerrar_chamado(ticket_id):
             SET status = ?, closed_at = ?, updated_at = ?
             WHERE id = ? AND store_id = ?
             ''',
-            ('resolvido', now, now, ticket_id, user['store_id'])
+            ('resolvido', now, now, ticket_id, row['store_id'])
         )
 
     return jsonify({'ok': True, 'ticket_id': ticket_id})
@@ -869,17 +1006,23 @@ def support_excluir_chamado(ticket_id):
     now = now_iso()
 
     with get_db() as conn:
-        ticket = conn.execute(
-            'SELECT * FROM support_tickets WHERE id = ? AND store_id = ?',
-            (ticket_id, user['store_id'])
-        ).fetchone()
+        if is_admin:
+            ticket = conn.execute(
+                'SELECT * FROM support_tickets WHERE id = ?',
+                (ticket_id,)
+            ).fetchone()
+        else:
+            ticket = conn.execute(
+                'SELECT * FROM support_tickets WHERE id = ? AND store_id = ?',
+                (ticket_id, user['store_id'])
+            ).fetchone()
         if not ticket:
             return jsonify({'error': 'Chamado nao encontrado.'}), 404
         if not is_admin and int(ticket['user_id'] or 0) != int(user['id'] or 0):
             return jsonify({'error': 'Você só pode excluir os seus próprios chamados.'}), 403
 
-        conn.execute('DELETE FROM support_messages WHERE ticket_id = ? AND store_id = ?', (ticket_id, user['store_id']))
-        conn.execute('DELETE FROM support_tickets WHERE id = ? AND store_id = ?', (ticket_id, user['store_id']))
+        conn.execute('DELETE FROM support_messages WHERE ticket_id = ? AND store_id = ?', (ticket_id, ticket['store_id']))
+        conn.execute('DELETE FROM support_tickets WHERE id = ? AND store_id = ?', (ticket_id, ticket['store_id']))
 
     return jsonify({'ok': True, 'ticket_id': ticket_id, 'deleted_at': now})
 
@@ -901,6 +1044,7 @@ def support_autoatendimento():
     now = now_iso()
     with get_db() as conn:
         faq_candidates = _search_faq_candidates(conn, question, limit=5)
+        faq_index = _load_faq_index(conn, limit=120)
 
         best_faq = faq_candidates[0] if faq_candidates else None
         q_len = len(set(_tokenize_text(question)))
@@ -921,7 +1065,7 @@ def support_autoatendimento():
             suggested_subject = best_faq.get('question') or 'Duvida operacional'
             needs_handoff = confidence < 0.62
         else:
-            ai_out = _ai_self_service_answer(question, faq_candidates)
+            ai_out = _ai_self_service_answer(question, faq_candidates, faq_index)
             if ai_out:
                 answer = ai_out['answer']
                 confidence = ai_out['confidence']
@@ -995,14 +1139,33 @@ def support_autoatendimento():
             _notify_support_ticket_created(
                 {
                     'id': ticket_id,
+                    'store_id': user['store_id'],
+                    'store_name': user.get('store_name') or '',
                     'subject': subject,
                     'category': category,
                     'severity': severity,
                     'status': 'aberto',
                     'ai_summary': ai_summary,
+                    'created_by': user.get('display_name') or user.get('username') or '',
+                    'created_by_username': user.get('username') or '',
                 },
                 user,
                 f'Duvida via autoatendimento: {question}',
+            )
+            _emit_support_ticket_created(
+                {
+                    'id': ticket_id,
+                    'store_id': user['store_id'],
+                    'store_name': user.get('store_name') or '',
+                    'subject': subject,
+                    'category': category,
+                    'severity': severity,
+                    'status': 'aberto',
+                    'created_by': user.get('display_name') or user.get('username') or '',
+                    'created_by_username': user.get('username') or '',
+                    'created_at': now,
+                },
+                user,
             )
 
     return jsonify({

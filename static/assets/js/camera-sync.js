@@ -742,6 +742,7 @@ class CameraSync {
 
 // ── Inicialização global ───────────────────────────────────
 const cameraSync = new CameraSync();
+window.cameraSync = cameraSync;
 
 document.addEventListener('DOMContentLoaded', () => {
   cameraSync._ensureLauncher();

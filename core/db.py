@@ -873,7 +873,7 @@ def ensure_support_faq_defaults(conn):
         },
         {
             'question': 'Nao consigo gerar ou baixar o PDF do orçamento',
-            'answer': 'Confirme se todos os campos obrigatorios do orcamento foram preenchidos e tente novamente. Se nada baixar, teste em aba anonima e verifique bloqueio de pop-up do navegador.',
+            'answer': 'Passo a passo: 1) Clique em Gerar Orcamento. 2) Preencha cliente, itens, valores e observacoes obrigatorias. 3) Confirme se existe valor total maior que zero. 4) Clique em Gerar PDF e aguarde a montagem. 5) Se o download nao iniciar, libere pop-up/download para este site e tente novamente. 6) Se ainda falhar, abra em aba anonima e repita o processo com os mesmos dados.',
             'tags': 'orcamento,pdf,baixar,download',
             'category': 'orcamento',
             'priority': 30,

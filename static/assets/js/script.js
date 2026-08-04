@@ -236,6 +236,7 @@ function switchTab(id,btn){
     if (typeof supportCarregarChamados === 'function') {
       supportCarregarChamados();
     }
+    _supportMarkAllAsRead();
   }
 
   const activeDesktopNav=document.querySelector('header nav .nav-item.active');
@@ -6631,6 +6632,10 @@ let _usuarioEdicaoId = null;
 let _usuariosSistemaPorId = {};
 let _supportTicketsById = {};
 let _supportTicketAtualId = null;
+let _supportKnownTicketIds = new Set();
+let _supportUnreadTicketIds = new Set();
+let _supportRealtimeBound = false;
+let _supportRealtimeBindTimer = null;
 let _ssLastQuestion = '';
 let _ssLastResponse = null;
 
@@ -8236,6 +8241,101 @@ function _supportCanDeleteTicket(ticket) {
   return !!ticketUserId && !!currentUserId && ticketUserId === currentUserId;
 }
 
+function _supportIsAdmin() {
+  const currentUser = window.FF_CURRENT_USER || {};
+  return String(currentUser.role || '').toLowerCase() === 'admin';
+}
+
+function _supportUnreadCount() {
+  return _supportUnreadTicketIds.size;
+}
+
+function _supportRenderHeaderBadge() {
+  const badge = document.getElementById('supportNotifyBadge');
+  if (!badge) return;
+  if (!_supportIsAdmin()) {
+    badge.style.display = 'none';
+    return;
+  }
+
+  const count = _supportUnreadCount();
+  if (!count) {
+    badge.style.display = 'none';
+    badge.textContent = '';
+    return;
+  }
+
+  badge.style.display = 'inline-flex';
+  badge.textContent = (count > 99 ? '99+' : String(count)) + ' novo' + (count > 1 ? 's' : '');
+}
+
+function _supportMarkAllAsRead() {
+  if (!_supportUnreadTicketIds.size) return;
+  _supportUnreadTicketIds.clear();
+  _supportRenderHeaderBadge();
+}
+
+function _supportRegisterNewTicket(ticketId) {
+  const id = Number(ticketId) || 0;
+  if (!id || !_supportIsAdmin()) return;
+  _supportUnreadTicketIds.add(id);
+  _supportRenderHeaderBadge();
+}
+
+function supportInitHeaderBadge() {
+  if (!_supportIsAdmin()) return;
+
+  const existing = document.getElementById('supportNotifyBadge');
+  if (existing) {
+    _supportRenderHeaderBadge();
+    return;
+  }
+
+  const badge = document.createElement('button');
+  badge.id = 'supportNotifyBadge';
+  badge.type = 'button';
+  badge.title = 'Abrir Suporte Operacional';
+  badge.style.cssText = [
+    'display:none',
+    'position:fixed',
+    'top:76px',
+    'right:16px',
+    'z-index:8300',
+    'align-items:center',
+    'justify-content:center',
+    'padding:8px 12px',
+    'border-radius:999px',
+    'border:1px solid #A81717',
+    'background:#B22222',
+    'color:#fff',
+    'font-size:11px',
+    'font-weight:700',
+    'letter-spacing:.4px',
+    'font-family:Raleway, sans-serif',
+    'box-shadow:0 8px 22px rgba(178,34,34,.35)',
+    'cursor:pointer'
+  ].join(';');
+
+  badge.addEventListener('click', () => {
+    switchTab('admin');
+    _supportMarkAllAsRead();
+    const supportStatus = document.getElementById('supportStatus');
+    if (supportStatus) {
+      supportStatus.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+
+  document.body.appendChild(badge);
+  _supportRenderHeaderBadge();
+}
+
+function _supportOpenedByLabel(ticket) {
+  const name = String(ticket?.created_by || ticket?.created_by_username || '').trim() || 'Usuário';
+  const store = String(ticket?.store_name || '').trim();
+  if (_supportIsAdmin() && store) return name + ' • ' + store;
+  return name;
+}
+
 function _supportRenderDetalhe(ticket, messages) {
   const detail = document.getElementById('supportDetail');
   const protocolEl = document.getElementById('supportCurrentProtocol');
@@ -8288,7 +8388,7 @@ function _supportRenderTabela(tickets) {
   const list = Array.isArray(tickets) ? tickets : [];
 
   if (!list.length) {
-    body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Nenhum chamado encontrado para os filtros selecionados.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:var(--gray)">Nenhum chamado encontrado para os filtros selecionados.</td></tr>';
     _supportTicketAtualId = null;
     _supportRenderDetalhe(null, []);
     return;
@@ -8299,6 +8399,7 @@ function _supportRenderTabela(tickets) {
     return '<tr style="border-bottom:1px solid var(--border2)">' +
       '<td style="padding:10px 6px;font-family:monospace;color:var(--brown)">' + _esc(_supportProtocol(t.id)) + '</td>' +
       '<td style="padding:10px 6px;color:var(--brown)">' + _esc(t.subject || '-') + '</td>' +
+      '<td style="padding:10px 6px;color:var(--brown)">' + _esc(_supportOpenedByLabel(t)) + '</td>' +
       '<td style="padding:10px 6px;text-align:center">' + _supportSeverityBadge(t.severity) + '</td>' +
       '<td style="padding:10px 6px;text-align:center">' + _supportStatusBadge(t.status) + '</td>' +
       '<td style="padding:10px 6px;text-align:center;color:var(--gray)">' + _esc(_fmtDataHora(t.updated_at)) + '</td>' +
@@ -8314,7 +8415,7 @@ async function supportCarregarChamados() {
   const body = document.getElementById('supportTicketsBody');
   if (!body) return;
 
-  body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:var(--gray)">Carregando chamados...</td></tr>';
+  body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:var(--gray)">Carregando chamados...</td></tr>';
 
   try {
     const status = (document.getElementById('supportStatusFilter')?.value || '').trim();
@@ -8322,21 +8423,83 @@ async function supportCarregarChamados() {
     const qs = new URLSearchParams();
     if (status) qs.set('status', status);
     if (severity) qs.set('severity', severity);
+    if (_supportIsAdmin()) qs.set('scope', 'all');
     qs.set('limit', '100');
 
     const out = await _ffApi('/api/support/tickets?' + qs.toString());
     const tickets = out.tickets || [];
+    const prevKnownIds = new Set(_supportKnownTicketIds);
+    _supportKnownTicketIds = new Set(tickets.map(t => Number(t && t.id) || 0).filter(Boolean));
     _supportTicketsById = {};
     tickets.forEach(t => { _supportTicketsById[t.id] = t; });
     _supportRenderTabela(tickets);
     _supportSetStatus('Chamados carregados: ' + tickets.length + '.');
+
+    if (_supportIsAdmin() && prevKnownIds.size) {
+      const novos = tickets.filter(t => !prevKnownIds.has(Number(t && t.id) || 0));
+      if (novos.length) {
+        const top = novos[0];
+        const protocolo = _supportProtocol(top.id);
+        const autor = _supportOpenedByLabel(top);
+        toast('Novo chamado: ' + protocolo + ' • ' + autor);
+        novos.forEach(t => _supportRegisterNewTicket(t && t.id));
+      }
+    }
 
     if (_supportTicketAtualId && _supportTicketsById[_supportTicketAtualId]) {
       await supportAbrirChamado(_supportTicketAtualId, true);
     }
   } catch (err) {
     _supportSetStatus(err.message || 'Erro ao carregar chamados.', true);
-    body.innerHTML = '<tr><td colspan="6" style="padding:14px;text-align:center;color:#8A1F1F">Falha ao carregar chamados.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:#8A1F1F">Falha ao carregar chamados.</td></tr>';
+  }
+}
+
+function _supportHandleRealtimeCreated(payload) {
+  if (!_supportIsAdmin()) return;
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const protocol = String(p.protocol || _supportProtocol(p.id || 0));
+  const openedBy = String(p.created_by || p.created_by_username || 'Usuário');
+  const storeName = String(p.store_name || '').trim();
+  const suffix = storeName ? (' • ' + storeName) : '';
+  _supportRegisterNewTicket(p.id);
+  toast('Novo chamado recebido: ' + protocol + ' • ' + openedBy + suffix);
+  _supportSetStatus('Novo chamado em fila: ' + protocol + '.');
+  supportCarregarChamados();
+  if (typeof adminDashboardLoad === 'function') {
+    adminDashboardLoad();
+  }
+}
+
+function supportBindRealtimeNotifications() {
+  if (_supportRealtimeBound) return;
+
+  const tryBind = () => {
+    const socket = window.cameraSync && window.cameraSync.socket;
+    if (!socket) return false;
+    if (socket.__ffSupportNotifyBound) return true;
+    socket.on('support_ticket_created', _supportHandleRealtimeCreated);
+    socket.__ffSupportNotifyBound = true;
+    return true;
+  };
+
+  if (tryBind()) {
+    _supportRealtimeBound = true;
+    if (_supportRealtimeBindTimer) {
+      clearInterval(_supportRealtimeBindTimer);
+      _supportRealtimeBindTimer = null;
+    }
+    return;
+  }
+
+  if (!_supportRealtimeBindTimer) {
+    _supportRealtimeBindTimer = setInterval(() => {
+      if (tryBind()) {
+        _supportRealtimeBound = true;
+        clearInterval(_supportRealtimeBindTimer);
+        _supportRealtimeBindTimer = null;
+      }
+    }, 1000);
   }
 }
 
@@ -8929,7 +9092,9 @@ document.addEventListener('DOMContentLoaded', function() {
   cancelarEdicaoUsuario();
   carregarUsuariosSistema();
   carregarClientes();
+  supportInitHeaderBadge();
   supportCarregarChamados();
+  supportBindRealtimeNotifications();
 
   const params = new URLSearchParams(window.location.search || '');
   const tab = (params.get('tab') || '').trim().toLowerCase();

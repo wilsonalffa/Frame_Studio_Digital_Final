@@ -60,6 +60,8 @@ def handle_connect():
     }
 
     join_room(str(store_id))
+    if str((user or {}).get('role') or '').strip().lower() == 'admin':
+        join_room('admins')
     emit('connection_response', {
         'status': 'connected',
         'user_id': user_id,
