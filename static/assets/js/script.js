@@ -49,6 +49,7 @@ let partWidths=[1], partHeights=[1];
 let totalWcm=null, totalHcm=null;
 let enhOrigCanvas=null, enhScale=1, enhFilter='none';
 let enhRemoteEnabled=false;
+let enhUpscalerTier='basic';
 let _enhRemotePrefLoaded=false;
 const QI_PRESETS=[
   { key:'10x15', w:10, h:15 },
@@ -86,6 +87,7 @@ const ENH_REMOTE_TIMEOUT_MS=45000;
 const ENH_LOCAL_MAX_SIDE=16384;
 const ENH_LOCAL_MAX_PIXELS=140000000;
 const ENH_REMOTE_PREF_KEY='ff_enh_remote_enabled';
+const ENH_UPSCALER_TIER_PREF_KEY='ff_enh_upscaler_tier';
 
 
 // ─────────────────────────────────────────────────────────
@@ -1033,6 +1035,7 @@ async function qiEnhanceWithReplicate(sourceCanvas, scale){
   const form=new FormData();
   form.append('file', blob, 'fastframe-enhance.jpg');
   form.append('scale', String(scale>=3?4:2));
+  form.append('upscalerTier', enhUpscalerTier);
 
   const controller=new AbortController();
   const timeoutId=setTimeout(()=>controller.abort(), ENH_REMOTE_TIMEOUT_MS);
@@ -3170,8 +3173,11 @@ function ensureEnhRemotePreference(){
   _enhRemotePrefLoaded=true;
   try{
     enhRemoteEnabled=localStorage.getItem(ENH_REMOTE_PREF_KEY)==='1';
+    const tierSaved=(localStorage.getItem(ENH_UPSCALER_TIER_PREF_KEY)||'basic').toLowerCase();
+    enhUpscalerTier=tierSaved==='premium'?'premium':'basic';
   } catch {
     enhRemoteEnabled=false;
+    enhUpscalerTier='basic';
   }
   updateEnhRemoteInfo();
 }
@@ -3180,23 +3186,32 @@ function updateEnhRemoteInfo(){
   const cb=document.getElementById('enhUseRemote');
   const info=document.getElementById('enhRemoteInfo');
   const badge=document.getElementById('enhModeBadge');
+  const tierBasic=document.getElementById('enhTierBasic');
+  const tierPremium=document.getElementById('enhTierPremium');
   if(cb) cb.checked=Boolean(enhRemoteEnabled);
+  if(tierBasic&&tierPremium){
+    const isPremium=enhUpscalerTier==='premium';
+    tierBasic.classList.toggle('active', !isPremium);
+    tierPremium.classList.toggle('active', isPremium);
+    tierBasic.setAttribute('aria-pressed', !isPremium?'true':'false');
+    tierPremium.setAttribute('aria-pressed', isPremium?'true':'false');
+    tierBasic.disabled=!enhRemoteEnabled;
+    tierPremium.disabled=!enhRemoteEnabled;
+  }
   if(badge){
     if(enhRemoteEnabled){
-      badge.textContent='IA ativa';
-      badge.style.background='#FFF7E8';
-      badge.style.color='#6F4A1E';
-      badge.style.borderColor='#EBD9B7';
+      badge.textContent=enhUpscalerTier==='premium'?'Premium':'Basico';
+      badge.className=`enh-mode-badge ${enhUpscalerTier==='premium'?'premium':'basic'}`;
     } else {
       badge.textContent='Local';
-      badge.style.background='#EEF6F0';
-      badge.style.color='#245A38';
-      badge.style.borderColor='#CFE5D7';
+      badge.className='enh-mode-badge local';
     }
   }
   if(info){
     info.textContent=enhRemoteEnabled
-      ? 'IA externa ativada. O uso de crédito só ocorre quando ela for realmente acionada.'
+      ? (enhUpscalerTier==='premium'
+        ? 'Premium. Ideal para detalhes finos; tende a ter maior custo.'
+        : 'Basico. Melhor equilibrio de custo para o dia a dia.')
       : 'IA externa desativada. Todo processamento ficará local, sem consumo de crédito.';
   }
 }
@@ -3205,6 +3220,16 @@ function setEnhRemoteEnabled(enabled){
   enhRemoteEnabled=Boolean(enabled);
   try{
     localStorage.setItem(ENH_REMOTE_PREF_KEY, enhRemoteEnabled?'1':'0');
+  } catch {}
+  updateEnhRemoteInfo();
+  updateScaleInfo();
+}
+
+function setEnhUpscalerTier(tier){
+  if(!enhRemoteEnabled) return;
+  enhUpscalerTier=(String(tier||'basic').toLowerCase()==='premium')?'premium':'basic';
+  try{
+    localStorage.setItem(ENH_UPSCALER_TIER_PREF_KEY, enhUpscalerTier);
   } catch {}
   updateEnhRemoteInfo();
   updateScaleInfo();
@@ -3230,7 +3255,9 @@ function setScale(s,btn){
 function updateScaleInfo(){
   if(!enhOrigCanvas) return;
   const nw=enhOrigCanvas.width*enhScale, nh=enhOrigCanvas.height*enhScale;
-  const mode=enhRemoteEnabled?'IA externa liberada':'modo local';
+  const mode=enhRemoteEnabled
+    ? `IA externa (${enhUpscalerTier==='premium'?'premium':'basica'})`
+    : 'modo local';
   document.getElementById('enhScaleInfo').textContent=`Saída: ${nw.toLocaleString()} × ${nh.toLocaleString()} px · ${mode}`;
 }
 

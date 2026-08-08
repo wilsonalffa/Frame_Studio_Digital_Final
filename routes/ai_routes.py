@@ -10,7 +10,16 @@ from core.auth import login_required
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY', '')
 GEMINI_MODEL = (os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash') or 'gemini-2.5-flash').replace('models/', '')
 REPLICATE_API_TOKEN = os.environ.get('REPLICATE_API_TOKEN', '')
-REPLICATE_UPSCALER_MODEL = os.environ.get('REPLICATE_UPSCALER_MODEL', 'google/upscaler')
+REPLICATE_UPSCALER_BASIC_MODEL = os.environ.get('REPLICATE_UPSCALER_BASIC_MODEL') or os.environ.get('REPLICATE_UPSCALER_MODEL', 'google/upscaler')
+REPLICATE_UPSCALER_PREMIUM_MODEL = os.environ.get('REPLICATE_UPSCALER_PREMIUM_MODEL', '').strip()
+REPLICATE_UPSCALER_BASIC_IMAGE_FIELD = os.environ.get('REPLICATE_UPSCALER_BASIC_IMAGE_FIELD', 'image').strip() or 'image'
+REPLICATE_UPSCALER_BASIC_SCALE_FIELD = os.environ.get('REPLICATE_UPSCALER_BASIC_SCALE_FIELD', 'scale').strip()
+REPLICATE_UPSCALER_PREMIUM_IMAGE_FIELD = os.environ.get('REPLICATE_UPSCALER_PREMIUM_IMAGE_FIELD', 'image').strip() or 'image'
+REPLICATE_UPSCALER_PREMIUM_SCALE_FIELD = os.environ.get('REPLICATE_UPSCALER_PREMIUM_SCALE_FIELD', 'scale').strip()
+REPLICATE_UPSCALER_PREMIUM_ENHANCE_MODEL = os.environ.get('REPLICATE_UPSCALER_PREMIUM_ENHANCE_MODEL', '').strip()
+REPLICATE_UPSCALER_PREMIUM_SUBJECT_DETECTION = os.environ.get('REPLICATE_UPSCALER_PREMIUM_SUBJECT_DETECTION', '').strip()
+REPLICATE_UPSCALER_PREMIUM_FACE_ENHANCEMENT = os.environ.get('REPLICATE_UPSCALER_PREMIUM_FACE_ENHANCEMENT', '').strip().lower()
+REPLICATE_UPSCALER_PREMIUM_FACE_ENHANCEMENT_CREATIVITY = os.environ.get('REPLICATE_UPSCALER_PREMIUM_FACE_ENHANCEMENT_CREATIVITY', '').strip()
 MAX_CHAT_MESSAGES = int(os.environ.get('MAX_CHAT_MESSAGES', 20))
 MAX_CHAT_TEXT_CHARS = int(os.environ.get('MAX_CHAT_TEXT_CHARS', 16000))
 MAX_CHAT_PAYLOAD_BYTES = int(os.environ.get('MAX_CHAT_PAYLOAD_BYTES', 2 * 1024 * 1024))
@@ -65,6 +74,38 @@ def _extract_prediction_output_url(prediction):
             return first.get('url') or first.get('file') or first.get('image')
     if isinstance(output, dict):
         return output.get('url') or output.get('file') or output.get('image')
+    return None
+
+
+def _resolve_upscaler_profile(requested_tier):
+    tier = (requested_tier or 'basic').strip().lower()
+    if tier == 'premium' and REPLICATE_UPSCALER_PREMIUM_MODEL:
+        return {
+            'tier': 'premium',
+            'label': 'Upscaler Premium',
+            'model': REPLICATE_UPSCALER_PREMIUM_MODEL,
+            'image_field': REPLICATE_UPSCALER_PREMIUM_IMAGE_FIELD,
+            'scale_field': REPLICATE_UPSCALER_PREMIUM_SCALE_FIELD,
+            'enhance_model': REPLICATE_UPSCALER_PREMIUM_ENHANCE_MODEL,
+            'subject_detection': REPLICATE_UPSCALER_PREMIUM_SUBJECT_DETECTION,
+            'face_enhancement': REPLICATE_UPSCALER_PREMIUM_FACE_ENHANCEMENT,
+            'face_enhancement_creativity': REPLICATE_UPSCALER_PREMIUM_FACE_ENHANCEMENT_CREATIVITY,
+        }
+    return {
+        'tier': 'basic',
+        'label': 'Upscaler Basico',
+        'model': REPLICATE_UPSCALER_BASIC_MODEL,
+        'image_field': REPLICATE_UPSCALER_BASIC_IMAGE_FIELD,
+        'scale_field': REPLICATE_UPSCALER_BASIC_SCALE_FIELD,
+    }
+
+
+def _to_optional_bool(value):
+    normalized = str(value or '').strip().lower()
+    if normalized in ('1', 'true', 'sim', 'yes', 'on'):
+        return True
+    if normalized in ('0', 'false', 'nao', 'não', 'no', 'off'):
+        return False
     return None
 
 @ai_bp.route('/api/chat', methods=['POST'])
@@ -204,6 +245,7 @@ def enhance_image():
             else:
                 image_data_url = f'data:{mime_type};base64,{image_b64}'
             requested_scale = int(body.get('scale', 2) or 2)
+            requested_tier = str(body.get('upscalerTier', 'basic') or 'basic')
         else:
             image_bytes = uploaded.read()
             if not image_bytes:
@@ -213,15 +255,41 @@ def enhance_image():
             mime_type = uploaded.mimetype or 'image/jpeg'
             image_data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
             requested_scale = int(request.form.get('scale', 2) or 2)
+            requested_tier = str(request.form.get('upscalerTier', 'basic') or 'basic')
 
         scale = 4 if requested_scale >= 3 else 2
+        profile = _resolve_upscaler_profile(requested_tier)
+        if not profile.get('model'):
+            return jsonify({'error': 'Nenhum modelo de upscaler configurado no servidor.'}), 500
+
+        model_input = {
+            profile['image_field']: image_data_url,
+        }
+        if profile.get('scale_field'):
+            scale_value = scale
+            if profile['tier'] == 'premium' and profile.get('scale_field') == 'upscale_factor':
+                scale_value = '4x' if scale >= 4 else '2x'
+            model_input[profile['scale_field']] = scale_value
+
+        if profile['tier'] == 'premium':
+            if profile.get('enhance_model'):
+                model_input['enhance_model'] = profile['enhance_model']
+            if profile.get('subject_detection'):
+                model_input['subject_detection'] = profile['subject_detection']
+            face_enhancement = _to_optional_bool(profile.get('face_enhancement'))
+            if face_enhancement is not None:
+                model_input['face_enhancement'] = face_enhancement
+            creativity_raw = str(profile.get('face_enhancement_creativity') or '').strip()
+            if creativity_raw:
+                try:
+                    model_input['face_enhancement_creativity'] = float(creativity_raw)
+                except ValueError:
+                    pass
+
         prediction = _replicate_json_request(
-            f'https://api.replicate.com/v1/models/{REPLICATE_UPSCALER_MODEL}/predictions',
+            f"https://api.replicate.com/v1/models/{profile['model']}/predictions",
             {
-                'input': {
-                    'image': image_data_url,
-                    'scale': scale,
-                }
+                'input': model_input
             },
             method='POST',
             timeout=60,
@@ -232,13 +300,13 @@ def enhance_image():
 
         if prediction.get('status') != 'succeeded':
             return jsonify({
-                'error': 'Falha ao melhorar a imagem com Upscaler.',
+                'error': f"Falha ao melhorar a imagem com {profile['label']}.",
                 'detail': prediction.get('error') or prediction.get('status') or 'status desconhecido',
             }), 502
 
         output_url = _extract_prediction_output_url(prediction)
         if not output_url:
-            return jsonify({'error': 'Upscaler nao retornou uma imagem de saida.'}), 502
+            return jsonify({'error': f"{profile['label']} nao retornou uma imagem de saida."}), 502
 
         output_req = urllib.request.Request(
             output_url,

@@ -3,6 +3,9 @@ from flask import Flask
 from core.db import init_db, close_request_db, IS_PROD
 from core.socket_ext import socketio
 from datetime import timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-fastframe-2026-fallback')
 
